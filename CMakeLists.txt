@@ -1,0 +1,48 @@
+cmake_minimum_required(VERSION 3.16)
+
+project(realtime_voice
+    VERSION 1.0
+    LANGUAGES CXX
+)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+find_package(Boost REQUIRED COMPONENTS system)
+find_package(PkgConfig REQUIRED)
+
+pkg_check_modules(OPUS REQUIRED opus)
+pkg_check_modules(PORTAUDIO REQUIRED portaudio-2.0)
+
+add_executable(voice_server
+    server/main.cpp
+)
+
+add_executable(voice_client
+    client/main.cpp
+)
+
+target_include_directories(voice_server PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${Boost_INCLUDE_DIRS}
+    ${OPUS_INCLUDE_DIRS}
+)
+
+target_include_directories(voice_client PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${Boost_INCLUDE_DIRS}
+    ${OPUS_INCLUDE_DIRS}
+    ${PORTAUDIO_INCLUDE_DIRS}
+)
+
+target_link_libraries(voice_server PRIVATE
+    Boost::system
+    ${OPUS_LIBRARIES}
+)
+
+target_link_libraries(voice_client PRIVATE
+    Boost::system
+    ${OPUS_LIBRARIES}
+    ${PORTAUDIO_LIBRARIES}
+)
