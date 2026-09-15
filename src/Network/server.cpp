@@ -4,48 +4,33 @@
 Server::Server(
     unsigned short port
 ):
-socket(ioContext),
+socket(io_context),
 port(port){
 
 }
 
+//using the UdpSocket Class, we have abstracted away the network specific logic
 void Server::HandleMessage(){
-    std::array<char,1024> buffer{};
-
     boost::asio::ip::udp::endpoint clientEndpoint;
 
-    const std::size_t bytesReceived = socket.receive_from(
-        boost::asio::buffer(buffer),
+    const std::string message = socket.ReceiveFrom(
         clientEndpoint
     );
 
-    const std::string message(
-        buffer.data(),
-        bytesReceived
-    );
+    std::cout<<"Client Message : "<<message<<"\n";
 
-    std::cout<<"Message Received from client : "<<message<<"\n";
+    const std::string response = "Hello from server";
 
-    const std::string response = "Hello from Server";
-    socket.send_to(
-        boost::asio::buffer(buffer),
-        clientEndpoint
+    socket.SendTo(
+        response, clientEndpoint
     );
 }
 
 void Server::Run(){
-    socket.open(
-        boost::asio::ip::udp::v4()
-    );
+    socket.Open();
 
-    socket.bind(
-        boost::asio::ip::udp::endpoint(
-            boost::asio::ip::udp::v4(),
-            port
-        )
-    );
-
+    socket.Bind(port);
     std::cout<<"Server Started on UDP Port : "<<port<<"\n";
 
-    HandleMessage(); //right now this is only going to handle a single message !
+    HandleMessage();
 }

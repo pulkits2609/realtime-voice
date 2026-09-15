@@ -1,19 +1,19 @@
 #pragma once
 
 #include <boost/asio.hpp>
+#include <string>
+
+#include "Network/udpSocket.hpp"
 
 class Server{
     private:
-        boost::asio::io_context ioContext;
-        boost::asio::ip::udp::socket socket;
+        void HandleMessage();
+
+        boost::asio::io_context io_context;
+        UdpSocket socket;
         unsigned short port;
 
-        void HandleMessage(); //handle the messages being sent by the client
-    
     public:
-        explicit Server(
-            unsigned short port
-        );
+        explicit Server(unsigned short port);
         void Run();
-
 };
