@@ -29,6 +29,7 @@ add_executable(voice_client
     src/Network/udpSocket.cpp
     src/Network/packet.cpp
     src/Audio/audioCapture.cpp
+    src/Audio/pcmBuffer.cpp
 )
 
 target_include_directories(voice_server PRIVATE
