@@ -1,5 +1,6 @@
 #include "Network/server.hpp"
 #include <iostream>
+#include "Network/packet.hpp"
 
 Server::Server(
     unsigned short port
@@ -13,16 +14,31 @@ port(port){
 void Server::HandleMessage(){
     boost::asio::ip::udp::endpoint clientEndpoint;
 
-    const std::string message = socket.ReceiveFrom(
+    //server now receives bytes
+    const std::vector<std::uint8_t> data = socket.ReceiveFrom(
         clientEndpoint
     );
 
-    std::cout<<"Client Message : "<<message<<"\n";
+    Packet packet;
+    if(!packet.Deserialize(data)){
+        std::cout<<"Received Invalid Packet\n";
+        return;
+    }
 
-    const std::string response = "Hello from server";
+    if(packet.GetType() == PacketType::Text){
+        std::cout<<"Client Message : "<<packet.GetMessage()<<"\n";
+    }
+
+    Packet response(
+        PacketType::Text,
+        "Hello from Server"
+    );
+
+    const std::vector<std::uint8_t> responseData = response.Serialize();
 
     socket.SendTo(
-        response, clientEndpoint
+        responseData,
+        clientEndpoint
     );
 }
 

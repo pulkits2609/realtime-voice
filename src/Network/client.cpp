@@ -1,5 +1,6 @@
 #include "Network/client.hpp"
 #include <iostream>
+#include "Network/packet.hpp"
 
 Client::Client(
     const std::string& serverAddress,
@@ -14,11 +15,32 @@ serverEndpoint(
 }
 
 void Client::SendMessage(const std::string& message){
-    socket.SendTo(message, serverEndpoint);
+    // socket.SendTo(message, serverEndpoint);
+    Packet packet(
+        PacketType::Text,
+        message
+    );
+    const std::vector<std::uint8_t> data= packet.Serialize();
+
+    socket.SendTo(
+        data,
+        serverEndpoint
+    );
 }
 
 std::string Client::ReceiveMessage(){
-    return socket.ReceiveFrom(serverEndpoint);
+    // return socket.ReceiveFrom(serverEndpoint);
+
+    const std::vector<std::uint8_t> data = socket.ReceiveFrom(
+        serverEndpoint
+    );
+
+    Packet packet;
+    if(!packet.Deserialize(data)){
+        return "Invalid Packet";
+    }
+
+    return packet.GetMessage();
 }
 
 void Client::Run(){

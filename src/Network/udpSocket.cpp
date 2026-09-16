@@ -28,16 +28,17 @@ void UdpSocket::Bind(
 }
 
 void UdpSocket::SendTo(
-    const std::string& message,
+    // const std::string& message,
+    const std::vector<std::uint8_t>& data,
     const boost::asio::ip::udp::endpoint& endpoint
 ){
     socket.send_to(
-        boost::asio::buffer(message),
+        boost::asio::buffer(data),
         endpoint
     );
 }
 
-std::string UdpSocket::ReceiveFrom(
+std::vector<std::uint8_t> UdpSocket::ReceiveFrom(
     boost::asio::ip::udp::endpoint& sender
 ){
     std::array<char,1024> buffer{};
@@ -47,5 +48,9 @@ std::string UdpSocket::ReceiveFrom(
         sender
     );
 
-    return std::string(buffer.data(), bytesReceived);
+    // return std::string(buffer.data(), bytesReceived);
+    return std::vector<std::uint8_t>(
+        buffer.begin(),
+        buffer.end()+bytesReceived
+    );
 }

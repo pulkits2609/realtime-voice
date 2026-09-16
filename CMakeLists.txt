@@ -19,6 +19,7 @@ add_executable(voice_server
     src/Network/server.cpp
     src/audio/miniaudio_impl.cpp
     src/Network/udpSocket.cpp
+    src/Network/packet.cpp
 )
 
 add_executable(voice_client
@@ -26,6 +27,7 @@ add_executable(voice_client
     src/audio/miniaudio_impl.cpp
     src/Network/client.cpp
     src/Network/udpSocket.cpp
+    src/Network/packet.cpp
 )
 
 target_include_directories(voice_server PRIVATE

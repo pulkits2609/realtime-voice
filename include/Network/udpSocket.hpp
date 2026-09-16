@@ -12,6 +12,7 @@
 //and pointer arithmetic... ( sounds geeky but it is what it is)
 
 #include <boost/asio.hpp>
+#include <vector> //for supporting packet class function calls
 
 class UdpSocket{
     private:
@@ -29,11 +30,12 @@ class UdpSocket{
         );
 
         void SendTo(
-            const std::string& message,
+            // const std::string& message,
+            const std::vector<std::uint8_t>& data,
             const boost::asio::ip::udp::endpoint& endpoint
         );
 
-        std::string ReceiveFrom(
+        std::vector<std::uint8_t> ReceiveFrom(
             boost::asio::ip::udp::endpoint& sender
         );
 };
