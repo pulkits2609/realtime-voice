@@ -17,17 +17,18 @@ pkg_check_modules(OPUS REQUIRED opus)
 add_executable(voice_server
     server/main.cpp
     src/Network/server.cpp
-    src/audio/miniaudio_impl.cpp
+    src/Audio/miniaudio_impl.cpp
     src/Network/udpSocket.cpp
     src/Network/packet.cpp
 )
 
 add_executable(voice_client
     client/main.cpp
-    src/audio/miniaudio_impl.cpp
+    src/Audio/miniaudio_impl.cpp
     src/Network/client.cpp
     src/Network/udpSocket.cpp
     src/Network/packet.cpp
+    src/Audio/audioCapture.cpp
 )
 
 target_include_directories(voice_server PRIVATE
