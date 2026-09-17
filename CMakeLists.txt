@@ -53,3 +53,20 @@ target_link_libraries(voice_client PRIVATE
     Boost::system
     ${OPUS_LIBRARIES}
 )
+
+# Opus tests
+add_executable(opus_test
+    src/Tests/opusTest.cpp
+
+    src/Codec/opusEncoder.cpp
+    src/Codec/opusDecoder.cpp
+)
+
+target_include_directories(opus_test PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${OPUS_INCLUDE_DIRS}
+)
+
+target_link_libraries(opus_test PRIVATE
+    ${OPUS_LIBRARIES}
+)
