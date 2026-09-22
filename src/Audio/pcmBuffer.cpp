@@ -11,7 +11,11 @@ void PcmBuffer::Push(
     const float* samples,
     std::size_t count
 ){
-    if(samples == nullptr) return;
+    if(samples == nullptr || count == 0) return;
+
+    std::lock_guard<std::mutex> lock(
+        mutex_ //as soon as execution reaches here, lock the mutex, execute function, unlock mutex automatically when it leaves scope (we dont need to deal with lock and unlocking manually)
+    );
 
     for(std::size_t i=0; i<count; i++){
         this->samples.push_back(
@@ -37,6 +41,10 @@ bool PcmBuffer::PopExact(
         return false;
     }
 
+    std::lock_guard<std::mutex> lock(
+        mutex_
+    );
+
     if(samples.size() < count){
         return false;
     }
@@ -53,5 +61,8 @@ bool PcmBuffer::PopExact(
 //last is this teeny tiny helper func
 
 std::size_t PcmBuffer::Size() const{
+    std::lock_guard<std::mutex> lock(
+        mutex_
+    );
     return samples.size();
 }

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <deque>
+#include <mutex>
 
 //this class will be used to buffer the audio samples
 //current problem lies in PCM Samples :
@@ -43,4 +44,6 @@ class PcmBuffer{
         
         //return how many samples are currently buffered, useful in debugging
         std::size_t Size() const;
+
+        mutable std::mutex mutex_;
 };
