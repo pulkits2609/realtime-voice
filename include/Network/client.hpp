@@ -4,6 +4,11 @@
 #include<string>
 
 #include "Network/udpSocket.hpp"
+//moving audio pipeline to the client
+#include "Audio/audioCapture.hpp"
+#include "Audio/pcmBuffer.hpp"
+#include "Codec/opusEncoder.hpp"
+//client does not need decoder (yet)
 
 class Client{
     private:
@@ -13,16 +18,28 @@ class Client{
 
         boost::asio::ip::udp::endpoint serverEndpoint;
 
+        AudioCapture audioCapture;
+
+        PcmBuffer pcmBuffer;
+        
+        OpusEncoderWrapper encoder;
+
         void SendMessage(
             const std::string& message
         );
         std::string ReceiveMessage();
+
+        void HandleCapture(
+            const float* samples,
+            std::size_t sampleCount
+        );
     
     public:
         Client(
             const std::string& serverAddress,
             unsigned short serverPort
         );
+        ~Client();
 
         void Run();
 };
