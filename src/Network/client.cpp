@@ -13,7 +13,7 @@ serverEndpoint(
     serverPort
 ),audioCapture(),
 pcmBuffer(48000),
-encoder(){
+encoder(),decoder(){
 
 }
 
@@ -55,6 +55,11 @@ void Client::Run(){
 
         return;
     }
+    if(!decoder.Initialize(48000,1)){
+        std::cerr<<"Failed to initialize Opus Decoder\n";
+
+        return;
+    }
 
     const bool audioInitialized = audioCapture.Initialize(
         [this](
@@ -85,6 +90,7 @@ void Client::Run(){
     std::array<float,960> frame{};
 
     std::array<std::uint8_t,4000> encodedData{};
+    std::array<float,960> decodedFrame{};
 
     int frameNumber = 0;
 
@@ -105,9 +111,24 @@ void Client::Run(){
                 continue;
             }
 
+            //immediately decode what we encoded
+            const int decodedSamples = decoder.Decode(
+                encodedData.data(),
+                encodedBytes,
+                decodedFrame.data(),
+                static_cast<int>(decodedFrame.size())
+            );
+
+            if(decodedSamples < 0){
+                std::cerr<<"Opus Decode failed : "<<opus_strerror(decodedSamples)<<"\n";
+
+                continue;
+            }
+
             frameNumber++;
 
-            std::cout<<"Encoded frame #"<<frameNumber<<" "<<encodedBytes<<" bytes\n";
+            std::cout<<"Encoded frame #"<<frameNumber<<" "<<encodedBytes<<" bytes,"
+            <<" decoded "<<decodedSamples<<" samples\n";
         }
 
         std::this_thread::sleep_for(

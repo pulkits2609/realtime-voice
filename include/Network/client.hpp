@@ -8,7 +8,7 @@
 #include "Audio/audioCapture.hpp"
 #include "Audio/pcmBuffer.hpp"
 #include "Codec/opusEncoder.hpp"
-//client does not need decoder (yet)
+#include "Codec/opusDecoder.hpp"
 
 class Client{
     private:
@@ -23,6 +23,7 @@ class Client{
         PcmBuffer pcmBuffer;
         
         OpusEncoderWrapper encoder;
+        OpusDecoderWrapper decoder;
 
         void SendMessage(
             const std::string& message
