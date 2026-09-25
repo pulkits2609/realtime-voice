@@ -61,6 +61,9 @@ void Client::Run(){
         return;
     }
 
+    //open UDP Socket
+    socket.Open();
+
     const bool audioInitialized = audioCapture.Initialize(
         [this](
             const float* samples,
@@ -111,44 +114,54 @@ void Client::Run(){
                 continue;
             }
 
-            //immediately decode what we encoded
-            const int decodedSamples = decoder.Decode(
-                encodedData.data(),
-                encodedBytes,
-                decodedFrame.data(),
-                static_cast<int>(decodedFrame.size())
+            //we create a Voice Packet using encoded Opus Data
+            const std::vector<std::uint8_t> opusPayload(
+                encodedData.begin(),
+                encodedData.begin()+encodedBytes
             );
 
-            if(decodedSamples < 0){
-                std::cerr<<"Opus Decode failed : "<<opus_strerror(decodedSamples)<<"\n";
+            Packet voicePacket(
+                PacketType::Voice,
+                opusPayload
+            );
 
-                continue;
-            }
+            //converting the voice packet to bytes
+            const std::vector<std::uint8_t> voiceData = voicePacket.Serialize();
 
-            frameNumber++;
+            //sending serialized voice packet to server
+            socket.SendTo(
+                voiceData,
+                serverEndpoint
+            );
 
-            std::cout<<"Encoded frame #"<<frameNumber<<" "<<encodedBytes<<" bytes,"
-            <<" decoded "<<decodedSamples<<" samples\n";
+            //immediately decode what we encoded
+            // const int decodedSamples = decoder.Decode(
+            //     encodedData.data(),
+            //     encodedBytes,
+            //     decodedFrame.data(),
+            //     static_cast<int>(decodedFrame.size())
+            // );
+
+            // if(decodedSamples < 0){
+            //     std::cerr<<"Opus Decode failed : "<<opus_strerror(decodedSamples)<<"\n";
+
+            //     continue;
+            // }
+
+            // frameNumber++;
+
+            // std::cout<<"Encoded frame #"<<frameNumber<<" "<<encodedBytes<<" bytes,"
+            // <<" decoded "<<decodedSamples<<" samples\n";
+
+            //for now we arent decoding back the packet (already tested it)
+
+
         }
 
         std::this_thread::sleep_for(
             std::chrono::milliseconds(1)
         );
     }
-
-    // socket.Open();
-   
-    // std::cout<<"Client Connected\n";
-    // std::cout<<"Sending Message to server\n";
-    // SendMessage(
-    //     "Hello From Client"
-    // );
-    // std::cout<<"Waiting for server response : \n";
-    // const std::string response = ReceiveMessage();
-
-    // std::cout<<"Server Response : \n"<<response<<"\n";
-
-    //for now no need of socket transfer
 }
 
 void Client::HandleCapture(

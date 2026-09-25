@@ -25,6 +25,12 @@ void Server::HandleMessage(){
         return;
     }
 
+    if(packet.GetType() == PacketType::Voice){
+        std::cout<<"Received Voice Packet : "<<packet.GetPayload().size()<<" bytes\n";
+        //voice doesnt require any decoding because server doesnt care, it just acts as a mediator for transmission
+        return;
+    }
+
     if(packet.GetType() == PacketType::Text){
         std::cout<<"Client Message : "<<packet.GetMessage()<<"\n";
     }
@@ -48,5 +54,7 @@ void Server::Run(){
     socket.Bind(port);
     std::cout<<"Server Started on UDP Port : "<<port<<"\n";
 
-    HandleMessage();
+    while(true){
+        HandleMessage(); //now the server continuously receives packets
+    }
 }
