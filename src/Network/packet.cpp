@@ -10,6 +10,12 @@ message(message){
     
 }
 
+Packet::Packet(PacketType type, const std::vector<std::uint8_t>& payload):
+type(type),payload(payload){
+
+}
+
+
 PacketType Packet::GetType() const{
     return type;
 }
@@ -27,55 +33,45 @@ const std::string& Packet::GetMessage() const{
 //Bytes 5+ Message
 
 std::vector<std::uint8_t> Packet::Serialize() const{
-    //this returns a vector of type uint8_t
-    const std::uint32_t messageLength = static_cast<std::uint32_t>(message.size());
-
     
-    std::vector<std::uint8_t> data;
-    //first block is reserved for the packet type
-    //then comes the messageLength, then the actual message
-    data.reserve(
-        1+sizeof(messageLength)+
-        message.size()
-    );
+    //the current serialize only takes string and puts bytes into packet
+    //now we want Text Packet -> use Message
+    //voice packet -> use Payload
 
-    data.push_back(
-        static_cast<std::uint8_t>(type)
-    );
+    //therefore we create the payload first
+    std::vector<std::uint8_t> payload;
 
-    //now when pushing the messageLength
-    //we cannot just push it directly because our messageLength is in form of uint32_t
-    //we need to break it into 4 parts
-
-    //0xFF means : Keep only the lowest 8 bits
-    data.push_back(
-        static_cast<std::uint8_t>(
-            messageLength & 0xFF //this gives the last 8 bits
-        )
-    );
-    data.push_back(
-        static_cast<std::uint8_t>(
-            (messageLength >> 8) & 0xFF // >> 8 shifts the last 8 bits moving them out, so now we have next 8 bits in last position, subsequently this is done for 16 and 32, so when pushing all of them, we have stored out uint32_t as 4 blocks of uint8_t
-            //this is also called as little endien encoding XD
-        )
-    );
-    data.push_back(
-        static_cast<std::uint8_t>(
-            (messageLength >> 16) & 0xFF
-        )
-    );
-    data.push_back(
-        static_cast<std::uint8_t>(
-            (messageLength >> 24) & 0xFF
-        )
-    );
-
-    //now the actual message
-    for(std::size_t i=0;i<message.size();i++){
-        data.push_back(
-            static_cast<std::uint8_t>(message[i])
+    if(type == PacketType::Text){
+        payload.assign(
+            message.begin(),
+            message.end()
         );
     }
+    else if(type == PacketType::Voice){
+        payload = this->payload;
+    }
+    
+    //this returns a vector of type uint8_t
+    const std::uint32_t messageLength =
+    static_cast<std::uint32_t>(payload.size());
+
+    
+    std::vector<std::uint8_t> data(
+        5 + messageLength
+    );
+
+    data[0] = static_cast<std::uint8_t>(type);
+
+    data[1] = messageLength & 0xFF;
+    data[2] = (messageLength >> 8) & 0xFF;
+    data[3] = (messageLength >> 16) & 0xFF;
+    data[4] = (messageLength >> 24) & 0xFF;
+
+    std::copy(
+        payload.begin(),
+        payload.end(),
+        data.begin() + 5
+    );
     
     return data;
 }
@@ -85,39 +81,47 @@ bool Packet::Deserialize(
 ){
     if(data.size() < 5){
         return false;
-        //1st byte is type, next 4 bytes are the length, if the packet lacks this minimum requirement then immediately discard
+        //1st byte is type, next 4 bytes are the length
     }
 
     type = static_cast<PacketType>(
         data[0]
     );
 
-    const std::uint32_t messageLen = static_cast<std::uint32_t>(data[1])
-    |
-    (static_cast<std::uint32_t>(data[2])<<8)
-    |
-    (static_cast<std::uint32_t>(data[3])<<16)
-    |
-    (static_cast<std::uint32_t>(data[4])<<24);
+    const std::uint32_t messageLen =
+        static_cast<std::uint32_t>(data[1])
+        |
+        (static_cast<std::uint32_t>(data[2]) << 8)
+        |
+        (static_cast<std::uint32_t>(data[3]) << 16)
+        |
+        (static_cast<std::uint32_t>(data[4]) << 24);
 
-    // the bitwise operator | is being used here to combine the bits
-    //for eg:
-    //   00001111
-    // | 11110000
-    //   -----------
-    //   11111111
-
-    if(data.size() < 5+messageLen){
+    if(data.size() < 5 + messageLen){
         return false;
     }
 
-    message.clear();
-    message.reserve(messageLen);
+    //Recover the raw payload bytes
+    payload.assign(
+        data.begin() + 5,
+        data.begin() + 5 + messageLen
+    );
 
-    for(std::uint32_t i=0; i<messageLen; i++){
-        message.push_back(static_cast<char>(data[5+i]));
+    //Only Text packets need to be converted into a string
+    if(type == PacketType::Text){
+        message.assign(
+            payload.begin(),
+            payload.end()
+        );
+    }
+    else if(type == PacketType::Voice){
+        message.clear();
     }
 
     return true;
 }
 
+
+const std::vector<std::uint8_t>& Packet::GetPayload() const{
+    return payload;
+}

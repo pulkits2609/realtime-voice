@@ -72,3 +72,12 @@ target_include_directories(opus_test PRIVATE
 target_link_libraries(opus_test PRIVATE
     ${OPUS_LIBRARIES}
 )
+
+add_executable(voice_packet_test
+    src/Tests/voicePacketTest.cpp
+    src/Network/packet.cpp
+)
+
+target_include_directories(voice_packet_test PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+)
