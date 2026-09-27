@@ -23,6 +23,7 @@ class PcmBuffer{
     private:
         std::deque<float> samples;
         std::size_t maxSamples;
+        mutable std::mutex mutex_;
 
     public:
         //this will impose a buffer limit on the PcmBuffer, so that it doesnt keep using memory infinitely (memory Nuke)
@@ -44,6 +45,11 @@ class PcmBuffer{
         
         //return how many samples are currently buffered, useful in debugging
         std::size_t Size() const;
-
-        mutable std::mutex mutex_;
+        
+        //takes however many samples are currently available
+        //up to the requested count
+        std::size_t PopAvailable(
+            float* output,
+            std::size_t count
+        );
 };

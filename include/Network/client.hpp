@@ -9,6 +9,8 @@
 #include "Audio/pcmBuffer.hpp"
 #include "Codec/opusEncoder.hpp"
 #include "Codec/opusDecoder.hpp"
+#include <thread>
+#include "Audio/audioPlayback.hpp"
 
 class Client{
     private:
@@ -24,6 +26,8 @@ class Client{
         
         OpusEncoderWrapper encoder;
         OpusDecoderWrapper decoder;
+
+        AudioPlayback audioPlayback;
 
         void SendMessage(
             const std::string& message
@@ -43,4 +47,6 @@ class Client{
         ~Client();
 
         void Run();
+
+        void ReceiveVoice();
 };

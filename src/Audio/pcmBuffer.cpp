@@ -66,3 +66,28 @@ std::size_t PcmBuffer::Size() const{
     );
     return samples.size();
 }
+
+std::size_t PcmBuffer::PopAvailable(
+    float* output,
+    std::size_t count
+){
+    if(output == nullptr || count == 0){
+        return 0;
+    }
+
+    std::lock_guard<std::mutex> lock(
+        mutex_
+    );
+
+    const std::size_t samplesToPop = std::min(
+        count,samples.size()
+    );
+
+    for(std::size_t i = 0; i < samplesToPop; i++){
+        output[i] = samples.front();
+
+        samples.pop_front();
+    }
+
+    return samplesToPop;
+}

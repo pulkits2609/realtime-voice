@@ -32,6 +32,7 @@ add_executable(voice_client
     src/Audio/pcmBuffer.cpp
     src/Codec/opusEncoder.cpp
     src/Codec/opusDecoder.cpp
+    src/Audio/audioPlayback.cpp
 )
 
 target_include_directories(voice_server PRIVATE

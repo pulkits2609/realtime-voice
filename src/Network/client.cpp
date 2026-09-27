@@ -89,6 +89,28 @@ void Client::Run(){
     }
     //now Client Run has responsibility for starting microphone
 
+    //initializing speaker playback
+    if(!audioPlayback.Initialize()){
+        std::cerr<<"Failed to initialize audioPlayback\n";
+
+        return;
+    }
+
+    //starting speaker playback
+    if(!audioPlayback.Start()){
+        std::cerr<<"Failed to start audio Playback\n";
+
+        return;
+    }
+
+    //now in a separate thread we start receiving our voice packets
+    std::thread receiveThread(
+        &Client::ReceiveVoice,
+        this
+    );
+
+    receiveThread.detach();
+
     //processing loop
     std::array<float,960> frame{};
 
@@ -173,6 +195,73 @@ void Client::HandleCapture(
     );
 }
 
+void Client::ReceiveVoice(){
+    boost::asio::ip::udp::endpoint sender;
+
+    std::array<float,960> decodedFrame{};
+
+    int frameNumber = 0;
+
+    while(true){
+        //waiting for the next UDP packet
+        const std::vector<std::uint8_t> data = socket.ReceiveFrom(
+            sender
+        );
+
+        if(data.empty()){
+            continue;
+        }
+
+        //only accept packets coming from our server
+        if(sender != serverEndpoint){
+            continue;
+        }
+        
+        Packet packet;
+        if(!packet.Deserialize(data)){
+            std::cerr<<"Received Invalid Voice packet\n";
+
+            continue;
+        }
+
+        //ignore other type of packets
+        if(packet.GetType() != PacketType::Voice){
+            continue;
+        }
+
+        const std::vector<std::uint8_t>& payload = packet.GetPayload();
+
+        if(payload.empty()){
+            continue;
+        }
+
+        //decoding opus packet back into PCM
+        const int decodedSamples = decoder.Decode(
+            payload.data(),
+            static_cast<int>(payload.size()),
+            decodedFrame.data(),
+            static_cast<int>(decodedFrame.size())
+        );
+
+        if(decodedSamples < 0){
+            std::cerr<<"Opus Decoding Failed : "<<opus_strerror(decodedSamples)<<"\n";
+
+            continue;
+        }
+
+        //now sending decoded PCM Samples to speaker buffer
+        audioPlayback.Push(
+            decodedFrame.data(),
+            static_cast<std::size_t>(decodedSamples)
+        );
+
+        frameNumber++;
+
+        std::cout<<"Received Voice Packet : "<<frameNumber<<" : "<<payload.size()<<"bytes, decoded "<<decodedSamples<<" samples\n";
+    }
+}
+
 Client::~Client(){
+    audioPlayback.Stop();
     audioCapture.Stop();
 }
