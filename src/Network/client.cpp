@@ -2,6 +2,8 @@
 #include <iostream>
 #include "Network/packet.hpp"
 #include <thread>
+#include <array>
+#include <chrono>
 
 Client::Client(
     const std::string& serverAddress,
@@ -11,10 +13,15 @@ socket(io_context),
 serverEndpoint(
     boost::asio::ip::make_address(serverAddress),
     serverPort
-),audioCapture(),
-jitterBuffer(3), //keepign the buffer very small because each opus frame is 20ms (3 packets * 20ms) = 60ms allowance of packet arrival validation
+),
+audioCapture(),
+captureQueue(),
 pcmBuffer(48000),
-encoder(),decoder(){
+encoder(),
+decoder(),
+audioPlayback(),
+jitterBuffer(3), //buffer is kept very small deliberately
+networkQueue(){
 
 }
 
@@ -112,16 +119,26 @@ void Client::Run(){
 
     receiveThread.detach();
 
-    //processing loop
+    //processing buffers
     std::array<float,960> frame{};
 
     std::array<std::uint8_t,4000> encodedData{};
-    std::array<float,960> decodedFrame{};
 
-    int frameNumber = 0;
     std::uint32_t sequenceNumber = 0;
 
     while(true){
+
+        //take captured audio from capture queue
+        std::vector<float> capturedSamples;
+        if(captureQueue.Pop(
+            capturedSamples
+        )){
+            pcmBuffer.Push(
+                capturedSamples.data(),
+                capturedSamples.size()
+            );
+        }
+
         if(pcmBuffer.PopExact(
             frame.data(),
             frame.size()
@@ -162,32 +179,40 @@ void Client::Run(){
                 serverEndpoint
             );
         }
+
+        ProcessReceivedVoice();
+
+        //prevent this processing loop from continously consuming CPU
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(1)
+        );
     }
 }
+
+//previously : MiniAudio callback -> HandleCapture -> PcmBuffer
+
+//now : MiniAudio Callback -> HandleCapture -> CaptureQueue -> Client Processing -> PcmBuffer
 
 void Client::HandleCapture(
     const float* samples,
     std::size_t sampleCount
 ){
-    pcmBuffer.Push(
-        samples,sampleCount
+    std::vector<float> capturedSamples(
+        samples,
+        samples + sampleCount
+    );
+
+    captureQueue.Push(
+        std::move(capturedSamples)
     );
 }
 
+//now this thread only has a single job
 void Client::ReceiveVoice(){
     boost::asio::ip::udp::endpoint sender;
 
-    std::array<float,960> decodedFrame{};
-
-    int frameNumber = 0;
-
-    std::uint32_t expectedSequenceNumber = 0;
-    bool receivedFirstPacket = false;
-    bool jitterBufferStarted = false;
-
     while(true){
-        //waiting for the next UDP packet
-        const std::vector<std::uint8_t> data = socket.ReceiveFrom(
+        std::vector<std::uint8_t> data = socket.ReceiveFrom(
             sender
         );
 
@@ -199,8 +224,19 @@ void Client::ReceiveVoice(){
         if(sender != serverEndpoint){
             continue;
         }
-        
+        networkQueue.Push(std::move(data));
+    }
+}
+
+//old receive processing is now moved into client processing thread
+void Client::ProcessReceivedVoice(){
+
+    std::vector<std::uint8_t> data;
+
+    while(networkQueue.Pop(data)){
+
         Packet packet;
+
         if(!packet.Deserialize(data)){
             std::cerr<<"Received Invalid Voice packet\n";
 
@@ -222,63 +258,97 @@ void Client::ReceiveVoice(){
 
         //the first packet tells where the sequence starts
         if(!receivedFirstPacket){
-            expectedSequenceNumber = sequenceNumber;
+
+            expectedSequenceNumber =
+                sequenceNumber;
 
             receivedFirstPacket = true;
         }
 
         //if packet is older than what we already expect
         //it is either late or duplicate
-        if(sequenceNumber < expectedSequenceNumber){
-            std::cout<<"Out of order / duplicate packet : "<<sequenceNumber<<"\n";
+        if(
+            sequenceNumber <
+            expectedSequenceNumber
+        ){
+
+            std::cout
+                <<"Out of Order / Duplicate Packet : "
+                <<sequenceNumber
+                <<"\n";
 
             continue;
         }
 
-        //storing packet inside jitter buffer
-        if(!jitterBuffer.Push(sequenceNumber, payload)){
-            std::cout<<"Duplicate / Full Jitter Buffer : "<<sequenceNumber<<"\n";
-            
+        //store packet inside jitter buffer
+        if(!jitterBuffer.Push(
+            sequenceNumber,
+            payload
+        )){
+
+            std::cout
+                <<"Duplicate / Full Jitter Buffer : "
+                <<sequenceNumber
+                <<"\n";
+
             continue;
         }
 
-        //waiting until jitter buffer has few packets before starting playback
-        if(!jitterBufferStarted && jitterBuffer.Size() >= 3){
+        //wait until jitter buffer has a few packets
+        //before starting playback
+        if(
+            !jitterBufferStarted &&
+            jitterBuffer.Size() >= 3
+        ){
+
             jitterBufferStarted = true;
 
-            std::cout<<"Jitter Buffer Started \n";
+            std::cout
+                <<"Jitter Buffer Started\n";
         }
 
         if(!jitterBufferStarted){
             continue;
         }
 
+        std::array<float,960> decodedFrame{};
+
         while(true){
+
             std::vector<std::uint8_t> nextPayload;
 
-            //first we try to get the packet exactly as we are expecting
-
+            //try to get exactly the packet we are expecting
             if(jitterBuffer.Pop(
                 expectedSequenceNumber,
                 nextPayload
             )){
-                const int decodedSamples = decoder.Decode(
-                    nextPayload.data(),
-                    static_cast<int>(nextPayload.size()),
-                    decodedFrame.data(),
-                    static_cast<int>(
-                        decodedFrame.size()
-                    )
-                );
+
+                const int decodedSamples =
+                    decoder.Decode(
+                        nextPayload.data(),
+                        static_cast<int>(
+                            nextPayload.size()
+                        ),
+                        decodedFrame.data(),
+                        static_cast<int>(
+                            decodedFrame.size()
+                        )
+                    );
 
                 if(decodedSamples < 0){
-                    std::cerr<<"Opus Decoding Failed : "<<opus_strerror(decodedSamples)<<"\n";
+
+                    std::cerr
+                        <<"Opus Decoding Failed : "
+                        <<opus_strerror(
+                            decodedSamples
+                        )
+                        <<"\n";
 
                     expectedSequenceNumber++;
+
                     continue;
                 }
 
-                //sending decoded PCM Samples to speaker buffer
                 audioPlayback.Push(
                     decodedFrame.data(),
                     static_cast<std::size_t>(
@@ -288,50 +358,76 @@ void Client::ReceiveVoice(){
 
                 frameNumber++;
 
-                std::cout<<"Received Voice Packet : "<<frameNumber<<" : sequence "<<sequenceNumber<<" : "<<payload.size()<<"bytes, decoded "<<decodedSamples<<" samples\n";
-                
+                std::cout
+                    <<"Received Voice Packet : "
+                    <<frameNumber
+                    <<" : sequence "
+                    <<expectedSequenceNumber
+                    <<" : "
+                    <<nextPayload.size()
+                    <<"bytes, decoded "
+                    <<decodedSamples
+                    <<" samples\n";
+
                 expectedSequenceNumber++;
 
-                //after successfully playing one packet, check if there is another packet ready
                 continue;
             }
 
-            //the expected packet is not available
-            //but if we already have 3 packets waiting assume the expected packet was lost
+            //expected packet missing
+            //if we already have 3 packets waiting,
+            //assume the packet was lost
             if(jitterBuffer.Size() >= 3){
-                std::cout<<"Packet loss detected : sequence "<<expectedSequenceNumber<<"\n";
 
-                //telling opus that packet was lost
-                const int decodedSamples = decoder.Decode(
-                    nullptr,
-                    0,
-                    decodedFrame.data(),
-                    static_cast<int>(
-                        decodedFrame.size()
-                    )
-                );
+                std::cout
+                    <<"Packet Loss Detected : sequence "
+                    <<expectedSequenceNumber
+                    <<"\n";
+
+                //tell Opus that packet was lost
+                const int decodedSamples =
+                    decoder.Decode(
+                        nullptr,
+                        0,
+                        decodedFrame.data(),
+                        static_cast<int>(
+                            decodedFrame.size()
+                        )
+                    );
 
                 if(decodedSamples < 0){
-                    std::cerr<<"Opus PLC Failed : "<<opus_strerror(decodedSamples)<<"\n";
+
+                    std::cerr
+                        <<"Opus PLC Failed : "
+                        <<opus_strerror(
+                            decodedSamples
+                        )
+                        <<"\n";
 
                     expectedSequenceNumber++;
 
                     continue;
                 }
 
-                //we send the generated replacement PCM to the speaker buffer
+                //send generated replacement PCM
+                //to the speaker buffer
                 audioPlayback.Push(
                     decodedFrame.data(),
-                    static_cast<std::size_t>(decodedSamples)
+                    static_cast<std::size_t>(
+                        decodedSamples
+                    )
                 );
+
+                std::cout
+                    <<"Generated PLC Audio for sequence "
+                    <<expectedSequenceNumber
+                    <<"\n";
 
                 expectedSequenceNumber++;
 
-                std::cout<<"Generated PLC Audio for sequence "<<expectedSequenceNumber -1<<"\n";
-
                 continue;
             }
-            
+
             break;
         }
     }

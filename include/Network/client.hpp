@@ -1,17 +1,25 @@
 #pragma once
 
 #include<boost/asio.hpp>
-#include<string>
+
+#include <string>
+#include <vector>
+#include <cstdint>
 
 #include "Network/udpSocket.hpp"
-//moving audio pipeline to the client
+#include "Network/threadSafeQueue.hpp"
+
+//audio pipeline
 #include "Audio/audioCapture.hpp"
 #include "Audio/pcmBuffer.hpp"
-#include "Codec/opusEncoder.hpp"
+
 #include "Codec/opusDecoder.hpp"
-#include <thread>
+#include "Codec/opusEncoder.hpp"
+
 #include "Audio/audioPlayback.hpp"
 #include "Network/jitterBuffer.hpp"
+
+#include <thread>
 
 class Client{
     private:
@@ -23,6 +31,9 @@ class Client{
 
         AudioCapture audioCapture;
 
+        //audio data waiting to process
+        ThreadSafeQueue<std::vector<float>> captureQueue;
+
         PcmBuffer pcmBuffer;
         
         OpusEncoderWrapper encoder;
@@ -30,6 +41,17 @@ class Client{
 
         AudioPlayback audioPlayback;
         JitterBuffer jitterBuffer;
+
+        std::uint32_t expectedSequenceNumber = 0;
+
+        bool receivedFirstPacket = false;
+
+        bool jitterBufferStarted = false;
+
+        int frameNumber = 0;
+
+        //network packets waiting to process
+        ThreadSafeQueue<std::vector<std::uint8_t>> networkQueue;
 
         void SendMessage(
             const std::string& message
@@ -40,6 +62,8 @@ class Client{
             const float* samples,
             std::size_t sampleCount
         );
+
+        void ProcessReceivedVoice();
     
     public:
         Client(
