@@ -55,24 +55,49 @@ std::vector<std::uint8_t> Packet::Serialize() const{
     const std::uint32_t messageLength =
     static_cast<std::uint32_t>(payload.size());
 
-    
+    //Text Packet :
+    //Byte 0 : Packet Type
+    //Byte 1-4 : Message Length
+    //Bytes 5+ : Message
+
+    //Voice packet :
+    //Byte 0 : Packet type
+    //Bytes 1-4 : Payload Length
+    //Bytes 5-8 : Sequence Number for ordering
+    //Bytes 9+ : Opus Payload
+
+    const std::size_t headerSize = type == PacketType::Voice ? 9 : 5;
+
     std::vector<std::uint8_t> data(
-        5 + messageLength
+        headerSize + messageLength
     );
 
     data[0] = static_cast<std::uint8_t>(type);
-
     data[1] = messageLength & 0xFF;
     data[2] = (messageLength >> 8) & 0xFF;
     data[3] = (messageLength >> 16) & 0xFF;
     data[4] = (messageLength >> 24) & 0xFF;
 
-    std::copy(
-        payload.begin(),
-        payload.end(),
-        data.begin() + 5
-    );
+    if(type == PacketType::Voice){
+        data[5] = sequenceNumber & 0xFF;
+        data[6] = (sequenceNumber >> 8) & 0xFF;
+        data[7] = (sequenceNumber >> 16) & 0xFF;
+        data[8] = (sequenceNumber >> 24) & 0xFF;
     
+        std::copy(
+            payload.begin(),
+            payload.end(),
+            data.begin()+9
+        );
+    }
+    else if(type == PacketType::Text){
+        std::copy(
+            payload.begin(),
+            payload.end(),
+            data.begin()+5
+        );
+    }
+
     return data;
 }
 
@@ -97,25 +122,39 @@ bool Packet::Deserialize(
         |
         (static_cast<std::uint32_t>(data[4]) << 24);
 
-    if(data.size() < 5 + messageLen){
+    //now Voice Packets have additional 4 byte sequence Number
+    const std::size_t headerSize = type == PacketType::Voice ? 9 : 5;
+
+    if(data.size() < headerSize + messageLen){
         return false;
     }
 
-    //Recover the raw payload bytes
-    payload.assign(
-        data.begin() + 5,
-        data.begin() + 5 + messageLen
-    );
+    if(type == PacketType::Voice){
+        sequenceNumber = 
+            static_cast<std::uint32_t>(data[5]) |
+            (static_cast<std::uint32_t>(data[6]) << 8) |
+            (static_cast<std::uint32_t>(data[7]) << 16) |
+            (static_cast<std::uint32_t>(data[8]) << 24);
+        
+        //recovering the raw Opus payload bytes
+        payload.assign(
+            data.begin() + 9,
+            data.begin() + 9 + messageLen
+        );
 
-    //Only Text packets need to be converted into a string
-    if(type == PacketType::Text){
+        message.clear();
+    }
+    else if(type == PacketType::Text){
+        //recovering raw payload bytes
+        payload.assign(
+            data.begin() + 5,
+            data.begin() + 5 + messageLen
+        );
+
         message.assign(
             payload.begin(),
             payload.end()
         );
-    }
-    else if(type == PacketType::Voice){
-        message.clear();
     }
 
     return true;
@@ -124,4 +163,14 @@ bool Packet::Deserialize(
 
 const std::vector<std::uint8_t>& Packet::GetPayload() const{
     return payload;
+}
+
+void Packet::SetSequenceNumber(
+    std::uint32_t sequenceNumber
+){
+    this->sequenceNumber = sequenceNumber;
+}
+
+std::uint32_t Packet::GetSequenceNumber() const{
+    return sequenceNumber;
 }

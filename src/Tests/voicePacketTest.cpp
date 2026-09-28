@@ -19,6 +19,8 @@ int main()
         opusData
     );
 
+    voicePacket.SetSequenceNumber(12345);
+
     const std::vector<std::uint8_t> serialized =
         voicePacket.Serialize();
 
@@ -39,6 +41,14 @@ int main()
 
         return 1;
     }
+
+    if(receivedPacket.GetSequenceNumber() != 12345){
+        std::cerr<<"Sequence Number mismatch\n";
+
+        return 1;
+    }
+
+    std::cout<<"Sequence Number : "<<receivedPacket.GetSequenceNumber()<<"\n";
 
     if(receivedPacket.GetPayload() != opusData)
     {

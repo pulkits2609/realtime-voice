@@ -14,6 +14,7 @@ class Packet{
         PacketType type;
         std::string message;
         std::vector<std::uint8_t> payload;
+        std::uint32_t sequenceNumber = 0;
     
     public:
         Packet();
@@ -39,5 +40,11 @@ class Packet{
         bool Deserialize(
             const std::vector<std::uint8_t>& data
         );
+
+        void SetSequenceNumber(
+            std::uint32_t sequenceNumber
+        );
+
+        std::uint32_t GetSequenceNumber() const;
 };
 

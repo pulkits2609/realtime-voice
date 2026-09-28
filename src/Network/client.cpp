@@ -118,6 +118,7 @@ void Client::Run(){
     std::array<float,960> decodedFrame{};
 
     int frameNumber = 0;
+    std::uint32_t sequenceNumber = 0;
 
     while(true){
         if(pcmBuffer.PopExact(
@@ -147,6 +148,10 @@ void Client::Run(){
                 opusPayload
             );
 
+            voicePacket.SetSequenceNumber(
+                ++sequenceNumber
+            );
+
             //converting the voice packet to bytes
             const std::vector<std::uint8_t> voiceData = voicePacket.Serialize();
 
@@ -155,34 +160,7 @@ void Client::Run(){
                 voiceData,
                 serverEndpoint
             );
-
-            //immediately decode what we encoded
-            // const int decodedSamples = decoder.Decode(
-            //     encodedData.data(),
-            //     encodedBytes,
-            //     decodedFrame.data(),
-            //     static_cast<int>(decodedFrame.size())
-            // );
-
-            // if(decodedSamples < 0){
-            //     std::cerr<<"Opus Decode failed : "<<opus_strerror(decodedSamples)<<"\n";
-
-            //     continue;
-            // }
-
-            // frameNumber++;
-
-            // std::cout<<"Encoded frame #"<<frameNumber<<" "<<encodedBytes<<" bytes,"
-            // <<" decoded "<<decodedSamples<<" samples\n";
-
-            //for now we arent decoding back the packet (already tested it)
-
-
         }
-
-        std::this_thread::sleep_for(
-            std::chrono::milliseconds(1)
-        );
     }
 }
 
@@ -201,6 +179,9 @@ void Client::ReceiveVoice(){
     std::array<float,960> decodedFrame{};
 
     int frameNumber = 0;
+
+    std::uint32_t expectedSequenceNumber = 0;
+    bool receivedFirstPacket = false;
 
     while(true){
         //waiting for the next UDP packet
@@ -226,6 +207,33 @@ void Client::ReceiveVoice(){
 
         //ignore other type of packets
         if(packet.GetType() != PacketType::Voice){
+            continue;
+        }
+
+        const std::uint32_t sequenceNumber = packet.GetSequenceNumber();
+
+        if(!receivedFirstPacket){
+            expectedSequenceNumber = sequenceNumber + 1;
+
+            receivedFirstPacket = true;
+
+            //lets say the fist packet is Sequence 47, then we say expected next 48 (we arent assuming that first packet is sequence 1)
+        }
+        else if(sequenceNumber == expectedSequenceNumber){
+            expectedSequenceNumber++;
+        }
+        
+        else if(sequenceNumber > expectedSequenceNumber){
+            const std::uint32_t lostPackets = sequenceNumber - expectedSequenceNumber;
+
+            std::cout<<"Packet Loss : "<<lostPackets<<" packets\n";
+            
+            expectedSequenceNumber = sequenceNumber+1;
+        }
+
+        else{
+            std::cout<<"Out of order / Duplicate Packet : "<<sequenceNumber<<"\n";
+            
             continue;
         }
 
@@ -257,7 +265,7 @@ void Client::ReceiveVoice(){
 
         frameNumber++;
 
-        std::cout<<"Received Voice Packet : "<<frameNumber<<" : "<<payload.size()<<"bytes, decoded "<<decodedSamples<<" samples\n";
+        std::cout<<"Received Voice Packet : "<<frameNumber<<" : sequence "<<sequenceNumber<<" : "<<payload.size()<<"bytes, decoded "<<decodedSamples<<" samples\n";
     }
 }
 
