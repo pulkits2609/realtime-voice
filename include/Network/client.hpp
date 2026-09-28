@@ -11,6 +11,7 @@
 #include "Codec/opusDecoder.hpp"
 #include <thread>
 #include "Audio/audioPlayback.hpp"
+#include "Network/jitterBuffer.hpp"
 
 class Client{
     private:
@@ -28,6 +29,7 @@ class Client{
         OpusDecoderWrapper decoder;
 
         AudioPlayback audioPlayback;
+        JitterBuffer jitterBuffer;
 
         void SendMessage(
             const std::string& message

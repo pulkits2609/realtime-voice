@@ -44,7 +44,7 @@ int OpusDecoderWrapper::Decode(
     float* output,
     int maxFrameSize
 ){
-    if(decoder == nullptr || packet == nullptr || output == nullptr){
+    if(decoder == nullptr || packet == nullptr || (packet == nullptr && packetBytes != 0)){
         return OPUS_BAD_ARG;
     }
 
