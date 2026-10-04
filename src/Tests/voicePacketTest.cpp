@@ -1,6 +1,7 @@
 #include <iostream>
 #include <vector>
 #include "Network/packet.hpp"
+#include "Common/debugLog.hpp"
 
 int main()
 {
@@ -48,7 +49,7 @@ int main()
         return 1;
     }
 
-    std::cout<<"Sequence Number : "<<receivedPacket.GetSequenceNumber()<<"\n";
+    DEBUG_LOG("Sequence Number : "<<receivedPacket.GetSequenceNumber()<<"\n");
 
     if(receivedPacket.GetPayload() != opusData)
     {
@@ -58,13 +59,12 @@ int main()
         return 1;
     }
 
-    std::cout
-        << "Voice packet test passed\n";
+    DEBUG_LOG("Voice packet test passed\n");
 
-    std::cout
-        << "Payload size: "
+    DEBUG_LOG(
+        "Payload size: "
         << receivedPacket.GetPayload().size()
-        << " bytes\n";
+        << " bytes\n");
 
     return 0;
 }

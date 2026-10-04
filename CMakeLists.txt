@@ -56,7 +56,6 @@ else()
 
 endif()
 
-
 # VOICE SERVER
 add_executable(voice_server
 
@@ -68,6 +67,7 @@ add_executable(voice_server
 
     src/Audio/miniaudio_impl.cpp
 )
+
 
 # VOICE CLIENT
 add_executable(voice_client
@@ -86,6 +86,10 @@ add_executable(voice_client
 
     src/Codec/opusEncoder.cpp
     src/Codec/opusDecoder.cpp
+)
+
+target_compile_definitions(voice_client PRIVATE
+    $<$<CONFIG:Debug>:VOICE_DEBUG>
 )
 
 # common include directories
@@ -135,6 +139,10 @@ add_executable(opus_test
     src/Codec/opusDecoder.cpp
 )
 
+target_compile_definitions(opus_test PRIVATE
+    $<$<CONFIG:Debug>:VOICE_DEBUG>
+)
+
 target_include_directories(opus_test PRIVATE
     ${PROJECT_SOURCE_DIR}/include
     ${BOOST_INCLUDE_DIR}
@@ -150,6 +158,10 @@ add_executable(voice_packet_test
     src/Tests/voicePacketTest.cpp
 
     src/Network/packet.cpp
+)
+
+target_compile_definitions(voice_packet_test PRIVATE
+    $<$<CONFIG:Debug>:VOICE_DEBUG>
 )
 
 target_include_directories(voice_packet_test PRIVATE

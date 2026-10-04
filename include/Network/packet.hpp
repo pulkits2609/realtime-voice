@@ -33,7 +33,7 @@ class Packet{
 
         PacketType GetType() const;
         
-        const std::string& GetMessage() const;
+        const std::string& GetTextMessage() const; //GetMessage() clashes with Windows API
         
         std::vector<std::uint8_t> Serialize() const;
         

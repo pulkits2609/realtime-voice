@@ -5,6 +5,7 @@
 
 #include "Codec/opusDecoder.hpp"
 #include "Codec/opusEncoder.hpp"
+#include "Common/debugLog.hpp"
 
 int main()
 {
@@ -13,7 +14,7 @@ int main()
     constexpr int frameSize = 960;
     constexpr int bitrate = 32000;
 
-    std::cout<<"Starting Opus codec test...\n";
+    DEBUG_LOG("Starting Opus codec test...\n");
 
     OpusEncoderWrapper encoder;
 
@@ -40,7 +41,7 @@ int main()
     std::array<float, frameSize> inputPcm{};
     constexpr float frequency = 440.0f;
     constexpr float amplitude = 0.25f;
-    constexpr float pi = M_PI;
+    constexpr float pi = 3.14159265358979323846f;
 
     for(int i=0; i<frameSize; i++){
         const float time =static_cast<float>(i) / static_cast<float>(sampleRate);
@@ -69,7 +70,7 @@ int main()
         return 1;
     }
 
-    std::cout<<"Encoded "<<frameSize<<" PCM samples into "<<encodedBytes<<" bytes.";
+    DEBUG_LOG("Encoded "<<frameSize<<" PCM samples into "<<encodedBytes<<" bytes.");
 
     std::array<float, frameSize> decodedPcm{};
 
@@ -95,7 +96,7 @@ int main()
         return 1;
     }
 
-    std::cout<<"Decoded "<< encodedBytes<< " bytes into "<< decodedSamples<< " PCM samples.\n";
+    DEBUG_LOG("Decoded "<< encodedBytes<< " bytes into "<< decodedSamples<< " PCM samples.\n");
 
     double errorSum = 0.0;
 
@@ -118,13 +119,13 @@ int main()
             decodedSamples
         );
 
-    std::cout<<"Mean squared error: "<<meanSquaredError<<'\n';
+    DEBUG_LOG("Mean squared error: "<<meanSquaredError<<'\n');
 
-    std::cout<<"First input sample: "<<inputPcm[0]<<'\n';
+    DEBUG_LOG("First input sample: "<<inputPcm[0]<<'\n');
 
-    std::cout<<"First decoded sample: "<<decodedPcm[0]<<'\n';
+    DEBUG_LOG("First decoded sample: "<<decodedPcm[0]<<'\n');
 
-    std::cout<<"Opus codec test completed.\n";
+    DEBUG_LOG("Opus codec test completed.\n");
 
     return 0;
 }

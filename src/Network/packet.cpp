@@ -20,7 +20,7 @@ PacketType Packet::GetType() const{
     return type;
 }
 
-const std::string& Packet::GetMessage() const{
+const std::string& Packet::GetTextMessage() const{
     return message;
 }
 

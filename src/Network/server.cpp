@@ -1,6 +1,7 @@
 #include "Network/server.hpp"
 #include <iostream>
 #include "Network/packet.hpp"
+#include "Common/debugLog.hpp"
 
 Server::Server(
     unsigned short port
@@ -21,7 +22,7 @@ void Server::HandleMessage(){
 
     Packet packet;
     if(!packet.Deserialize(data)){
-        std::cout<<"Received Invalid Packet\n";
+        DEBUG_LOG("Received Invalid Packet\n");
         return;
     }
 
@@ -31,10 +32,10 @@ void Server::HandleMessage(){
         if(!IsClientAlreadyConnected(clientEndpoint)){
             clients.push_back(clientEndpoint);
             
-            std::cout<<"New Client Connected : "<<clientEndpoint.address().to_string()<<":"<<clientEndpoint.port()<<"\n";
+            DEBUG_LOG("New Client Connected : "<<clientEndpoint.address().to_string()<<":"<<clientEndpoint.port()<<"\n");
         }
 
-        std::cout<<"Received Voice Packet : "<<packet.GetPayload().size()<<" bytes\n";
+        DEBUG_LOG("Received Voice Packet : "<<packet.GetPayload().size()<<" bytes\n");
         //voice doesnt require any decoding because server doesnt care, it just acts as a mediator for transmission
 
         //send this voice packet to every other client
@@ -46,7 +47,7 @@ void Server::HandleMessage(){
     }
 
     if(packet.GetType() == PacketType::Text){
-        std::cout<<"Client Message : "<<packet.GetMessage()<<"\n";
+        DEBUG_LOG("Client Message : "<<packet.GetTextMessage()<<"\n");
     }
 
     Packet response(
@@ -66,7 +67,7 @@ void Server::Run(){
     socket.Open();
 
     socket.Bind(port);
-    std::cout<<"Server Started on UDP Port : "<<port<<"\n";
+    DEBUG_LOG("Server Started on UDP Port : "<<port<<"\n");
 
     while(true){
         HandleMessage(); //now the server continuously receives packets
@@ -107,5 +108,5 @@ void Server::RelayVoicePacket(
         
     }
 
-    std::cout<<"Relayed Voice Packet to : "<<clientsReached<<" clients\n";
+    DEBUG_LOG("Relayed Voice Packet to : "<<clientsReached<<" clients\n");
 }

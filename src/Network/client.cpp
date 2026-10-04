@@ -4,6 +4,7 @@
 #include <thread>
 #include <array>
 #include <chrono>
+#include "Common/debugLog.hpp"
 
 Client::Client(
     const std::string& serverAddress,
@@ -51,7 +52,7 @@ std::string Client::ReceiveMessage(){
         return "Invalid Packet";
     }
 
-    return packet.GetMessage();
+    return packet.GetTextMessage();
 }
 
 void Client::Run(){
@@ -71,6 +72,7 @@ void Client::Run(){
 
     //open UDP Socket
     socket.Open();
+    socket.Bind(0); //let operating system choose an available local UDP Port
 
     const bool audioInitialized = audioCapture.Initialize(
         [this](
@@ -272,10 +274,10 @@ void Client::ProcessReceivedVoice(){
             expectedSequenceNumber
         ){
 
-            std::cout
+            DEBUG_LOG(
                 <<"Out of Order / Duplicate Packet : "
                 <<sequenceNumber
-                <<"\n";
+                <<"\n");
 
             continue;
         }
@@ -286,10 +288,10 @@ void Client::ProcessReceivedVoice(){
             payload
         )){
 
-            std::cout
+            DEBUG_LOG(
                 <<"Duplicate / Full Jitter Buffer : "
                 <<sequenceNumber
-                <<"\n";
+                <<"\n");
 
             continue;
         }
@@ -303,8 +305,7 @@ void Client::ProcessReceivedVoice(){
 
             jitterBufferStarted = true;
 
-            std::cout
-                <<"Jitter Buffer Started\n";
+            DEBUG_LOG("Jitter Buffer Started\n");
         }
 
         if(!jitterBufferStarted){
@@ -358,7 +359,7 @@ void Client::ProcessReceivedVoice(){
 
                 frameNumber++;
 
-                std::cout
+                DEBUG_LOG(
                     <<"Received Voice Packet : "
                     <<frameNumber
                     <<" : sequence "
@@ -367,7 +368,7 @@ void Client::ProcessReceivedVoice(){
                     <<nextPayload.size()
                     <<"bytes, decoded "
                     <<decodedSamples
-                    <<" samples\n";
+                    <<" samples\n");
 
                 expectedSequenceNumber++;
 
@@ -379,10 +380,10 @@ void Client::ProcessReceivedVoice(){
             //assume the packet was lost
             if(jitterBuffer.Size() >= 3){
 
-                std::cout
+                DEBUG_LOG(
                     <<"Packet Loss Detected : sequence "
                     <<expectedSequenceNumber
-                    <<"\n";
+                    <<"\n");
 
                 //tell Opus that packet was lost
                 const int decodedSamples =
@@ -418,10 +419,10 @@ void Client::ProcessReceivedVoice(){
                     )
                 );
 
-                std::cout
+                DEBUG_LOG(
                     <<"Generated PLC Audio for sequence "
                     <<expectedSequenceNumber
-                    <<"\n";
+                    <<"\n");
 
                 expectedSequenceNumber++;
 
