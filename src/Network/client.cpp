@@ -3,7 +3,6 @@
 #include "Network/packet.hpp"
 #include <thread>
 #include <array>
-#include <chrono>
 #include "Common/debugLog.hpp"
 
 Client::Client(
@@ -16,13 +15,13 @@ serverEndpoint(
     serverPort
 ),
 audioCapture(),
-captureQueue(),
-pcmBuffer(48000),
+captureQueue(8),
+pcmBuffer(9600),
 encoder(),
 decoder(),
 audioPlayback(),
 jitterBuffer(3), //buffer is kept very small deliberately
-networkQueue(){
+networkQueue(8){
 
 }
 
@@ -184,10 +183,10 @@ void Client::Run(){
 
         ProcessReceivedVoice();
 
-        //prevent this processing loop from continously consuming CPU
-        std::this_thread::sleep_for(
-            std::chrono::milliseconds(1)
-        );
+        // //prevent this processing loop from continously consuming CPU
+        // std::this_thread::sleep_for(
+        //     std::chrono::milliseconds(1)
+        // );
     }
 }
 

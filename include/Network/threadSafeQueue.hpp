@@ -23,8 +23,14 @@ class ThreadSafeQueue{
     private:
         std::queue<T> queue;
         mutable std::mutex mutex;
+
+        std::size_t maxSize;
     
     public:
+        explicit ThreadSafeQueue(
+            std::size_t maxSize = 8
+        );
+
         void Push(
             const T& value
         );
@@ -40,6 +46,16 @@ class ThreadSafeQueue{
         std::size_t Size() const;
 };
 
+template<typename T>
+ThreadSafeQueue<T>::ThreadSafeQueue(
+    std::size_t maxSize
+):
+maxSize(maxSize){
+
+}
+//instead of making thread safe queue unlimited where push can push indefinitely
+//we want it so that if we're behind, throw away the old audio rather than becoming seconds behind
+
 //push now supports both copying value, and moving value
 
 template<typename T>
@@ -50,6 +66,10 @@ void ThreadSafeQueue<T>::Push(
         mutex
     );
 
+    if(queue.size() >= maxSize){
+        queue.pop();
+    }
+
     queue.push(
         value
     );
@@ -59,7 +79,13 @@ template<typename T>
 void ThreadSafeQueue<T>::Push(
     T&& value
 ){
-    std::lock_guard<std::mutex> lock(mutex);
+    std::lock_guard<std::mutex> lock(
+        mutex
+    );
+
+    if(queue.size() >= maxSize){
+        queue.pop();
+    }
 
     queue.push(
         std::move(value)

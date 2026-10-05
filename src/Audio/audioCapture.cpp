@@ -21,6 +21,16 @@ bool AudioCapture::Initialize(
 
     config.sampleRate = 48000;
 
+    config.periodSizeInFrames = 480;
+    config.periods = 2;
+    config.performanceProfile = ma_performance_profile_low_latency;
+    //at 48hz
+    //480 frames/ 48000 frames per second
+    //0.010 sec
+    //10 ms
+
+    //the capture period is going to be 10ms
+
     config.capture.format = ma_format_f32;
 
     config.capture.channels = 1;

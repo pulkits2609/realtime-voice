@@ -2,7 +2,7 @@
 #include <algorithm>
 
 AudioPlayback::AudioPlayback():
-pcmBuffer(48000){
+pcmBuffer(9600){ //the application wont retain 1 second of audio now
 
 }
 
@@ -20,10 +20,14 @@ bool AudioPlayback::Initialize(){
     );
 
     config.sampleRate = 48000;
+    config.periodSizeInFrames = 480;
+    config.periods = 2;
+    config.performanceProfile = ma_performance_profile_low_latency;
     config.playback.format = ma_format_f32;
     config.playback.channels = 1;
     config.dataCallback = DataCallback;
     config.pUserData = this;
+
 
     const ma_result result = ma_device_init(
         nullptr,
