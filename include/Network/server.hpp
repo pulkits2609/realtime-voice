@@ -5,6 +5,8 @@
 
 #include "Network/udpSocket.hpp"
 
+#include "Network/tcpControl.hpp"
+
 class Server{
     private:
         void HandleMessage();
@@ -23,6 +25,8 @@ class Server{
         unsigned short port;
 
         std::vector<boost::asio::ip::udp::endpoint> clients;
+
+        TcpControlServer controlServer;
 
     public:
         explicit Server(unsigned short port);

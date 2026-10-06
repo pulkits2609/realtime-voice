@@ -7,7 +7,8 @@
 
 Client::Client(
     const std::string& serverAddress,
-    unsigned short serverPort
+    unsigned short serverPort,
+    const std::string& clientName
 ):
 socket(io_context),
 serverEndpoint(
@@ -21,7 +22,9 @@ encoder(),
 decoder(),
 audioPlayback(),
 jitterBuffer(3), //buffer is kept very small deliberately
-networkQueue(8){
+networkQueue(8),
+clientName(clientName),
+controlClient(io_context){
 
 }
 
@@ -55,6 +58,37 @@ std::string Client::ReceiveMessage(){
 }
 
 void Client::Run(){
+    if(!controlClient.Connect(
+        serverEndpoint.address().to_string(),
+        serverEndpoint.port(),
+        clientName
+    )){
+        std::cerr<<"Unable to Connect to voice server\n";
+
+        return;
+    }
+    
+    clientId = controlClient.GetClientId();
+
+    std::cout<<"Connected to server as : "<<clientName<<" | Client ID: "<<clientId<<"\n";
+
+    controlClient.StartReceive(
+        [this](
+            ControlMessageType type,
+            std::uint32_t remoteClientId,
+            const std::string& remoteClientName
+        ){
+            if(type == ControlMessageType::ClientConnected){
+                std::cout<<"Remote Client Connected : "<<remoteClientName<<" | Client ID : "<<remoteClientId<<"\n";
+            }
+            else if(
+                type == ControlMessageType::ClientDisconnected
+            ){
+                std::cout<<"Remote Client Disconnected  ID: "<<remoteClientId<<"\n";
+            }
+        }
+    );
+
     //initialize Opus
     if(!encoder.Initialize(
         48000,1,32000

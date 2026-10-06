@@ -3,12 +3,30 @@
 
 using boost::asio::ip::udp;
 
-int main()
-{
+int main(
+    int argc,
+    char* argv[]
+){
+    if(argc != 4){
+        std::cerr<<"Usage: voice_client <server_address> <server_port> <client_name> \n";
+
+        return 1;
+    }
     try{
+
+        const std::string serverAddress = argv[1];
+
+        const unsigned short serverPort = static_cast<unsigned short>(
+            std::stoi(
+                argv[2]
+            )
+        );
+
+        const std::string clientName = argv[3];
         Client client(
-            "192.168.1.103",
-            8080
+            serverAddress,
+            serverPort,
+            clientName
         );
 
         client.Run();

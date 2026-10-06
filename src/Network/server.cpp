@@ -7,7 +7,11 @@ Server::Server(
     unsigned short port
 ):
 socket(io_context),
-port(port){
+port(port),
+controlServer(
+    io_context,
+    port
+){
 
 }
 
@@ -67,6 +71,9 @@ void Server::Run(){
     socket.Open();
 
     socket.Bind(port);
+
+    controlServer.Start();
+
     DEBUG_LOG("Server Started on UDP Port : "<<port<<"\n");
 
     while(true){

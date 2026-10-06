@@ -66,6 +66,8 @@ add_executable(voice_server
     src/Network/packet.cpp
 
     src/Audio/miniaudio_impl.cpp
+
+    src/Network/tcpControl.cpp
 )
 
 
@@ -86,6 +88,8 @@ add_executable(voice_client
 
     src/Codec/opusEncoder.cpp
     src/Codec/opusDecoder.cpp
+
+    src/Network/tcpControl.cpp
 )
 
 target_compile_definitions(voice_client PRIVATE

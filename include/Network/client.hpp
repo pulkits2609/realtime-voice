@@ -21,6 +21,8 @@
 
 #include <thread>
 
+#include "Network/tcpControl.hpp"
+
 class Client{
     private:
         boost::asio::io_context io_context;
@@ -53,6 +55,11 @@ class Client{
         //network packets waiting to process
         ThreadSafeQueue<std::vector<std::uint8_t>> networkQueue;
 
+        std::string clientName;
+        std::uint32_t clientId = 0;
+
+        TcpControlClient controlClient;
+        
         void SendMessage(
             const std::string& message
         );
@@ -68,7 +75,8 @@ class Client{
     public:
         Client(
             const std::string& serverAddress,
-            unsigned short serverPort
+            unsigned short serverPort,
+            const std::string& clientName
         );
         ~Client();
 
