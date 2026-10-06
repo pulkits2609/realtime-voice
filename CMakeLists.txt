@@ -15,21 +15,35 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # dependencies :
 
-if(POLICY CMP0167)
-    cmake_policy(SET CMP0167 NEW)
-endif()
+if(WIN32)
 
-# Boost 1.90 is installed manually at C:/Boost
-# Boost.System is header-only, so no Boost library linking is required.
-
-set(BOOST_INCLUDE_DIR
-    "C:/Boost/include/boost-1_90"
-)
-
-if(NOT EXISTS "${BOOST_INCLUDE_DIR}/boost")
-    message(FATAL_ERROR
-        "Boost headers not found at ${BOOST_INCLUDE_DIR}"
+    # Boost 1.90 is installed manually on Windows
+    set(
+        BOOST_INCLUDE_DIR
+        "C:/Boost/include/boost-1_90"
     )
+
+    if(NOT EXISTS "${BOOST_INCLUDE_DIR}/boost")
+
+        message(FATAL_ERROR
+            "Boost headers not found at C:/Boost/include/boost-1_90"
+        )
+
+    endif()
+
+else()
+
+    # Linux uses the system Boost installation
+    find_package(
+        Boost
+        REQUIRED
+    )
+
+    set(
+        BOOST_INCLUDE_DIR
+        ${Boost_INCLUDE_DIRS}
+    )
+
 endif()
 
 # Linux : Opus discovered through pkg config
