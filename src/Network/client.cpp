@@ -6,6 +6,7 @@
 #include "Common/debugLog.hpp"
 #include <chrono>
 #include <stdexcept>
+#include <csignal>
 
 Client::Client(
     const std::string& serverAddress,
@@ -14,7 +15,7 @@ Client::Client(
 ):
 socket(io_context),
 serverEndpoint(
-    boost::asio::ip::make_address(serverAddress),
+    boost::asio::ip::udp::v4(),
     serverPort
 ),
 audioCapture(),
@@ -23,6 +24,7 @@ pcmBuffer(9600),
 encoder(),
 audioPlayback(),
 networkQueue(8),
+serverAddress(serverAddress),
 clientName(clientName),
 controlClient(io_context),
 controlQueue(0){
@@ -61,16 +63,42 @@ std::string Client::ReceiveMessage(){
 void Client::Run(){
     running = true;
 
+    io_context.restart();
+
+    boost::asio::signal_set signals(
+        io_context,
+        SIGINT,
+        SIGTERM
+    );
+
+    signals.async_wait(
+        [this](const boost::system::error_code& error, int){
+            if(!error){
+                running = false;
+            }
+        }
+    );
+
     try{
         if(!controlClient.Connect(
-            serverEndpoint.address().to_string(),
+            serverAddress,
             serverEndpoint.port(),
-            clientName
+            clientName,
+            running
         )){
+            if(!running){
+                Stop();
+                return;
+            }
+
             throw std::runtime_error(
                 "Unable to connect to voice server"
             );
         }
+
+        serverEndpoint.address(
+            controlClient.GetServerAddress()
+        );
 
         clientId = controlClient.GetClientId();
 
@@ -142,10 +170,12 @@ void Client::Run(){
             );
         }
 
+        io_context.poll();
+
         if(!running){
-            throw std::runtime_error(
-                "Server connection was lost during startup"
-            );
+            ProcessControlEvents();
+            Stop();
+            return;
         }
 
         receiveThread = std::thread(
@@ -158,11 +188,32 @@ void Client::Run(){
 
         std::uint32_t sequenceNumber = 0;
 
+        auto nextUdpKeepalive = std::chrono::steady_clock::now();
+
         while(running){
+            io_context.poll();
             ProcessControlEvents();
 
             if(!running){
                 break;
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+
+            if(now >= nextUdpKeepalive){
+                Packet keepalive(
+                    PacketType::Voice,
+                    std::vector<std::uint8_t>{}
+                );
+
+                keepalive.SetClientId(clientId);
+
+                socket.SendTo(
+                    keepalive.Serialize(),
+                    serverEndpoint
+                );
+
+                nextUdpKeepalive = now + std::chrono::seconds(2);
             }
 
             std::vector<float> capturedSamples;
@@ -446,7 +497,13 @@ void Client::ProcessReceivedVoice(){
 
         std::array<float,960> decodedFrame{};
 
-        while(true){
+        while(running){
+
+            io_context.poll();
+
+            if(!running){
+                return;
+            }
 
             std::vector<std::uint8_t> nextPayload;
 

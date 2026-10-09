@@ -2,6 +2,9 @@
 #include <iostream>
 #include "Network/packet.hpp"
 #include "Common/debugLog.hpp"
+#include <csignal>
+#include <chrono>
+#include <thread>
 
 Server::Server(
     unsigned short port
@@ -79,6 +82,10 @@ void Server::HandleMessage(){
             return;
         }
 
+        if(packet.GetPayload().empty()){
+            return;
+        }
+
         DEBUG_LOG(
             "Received Voice Packet from Client "
             <<clientId
@@ -106,40 +113,76 @@ void Server::HandleMessage(){
 }
 
 void Server::Run(){
-    socket.Open();
-    socket.Bind(port);
+    running = true;
+    io_context.restart();
 
-    controlServer.Start();
-
-    DEBUG_LOG(
-        "Server Started on UDP Port : "
-        <<port
-        <<"\n"
+    boost::asio::signal_set signals(
+        io_context,
+        SIGINT,
+        SIGTERM
     );
 
-    while(true){
-        try{
-            HandleMessage();
+    signals.async_wait(
+        [this](const boost::system::error_code& error, int){
+            if(!error){
+                running = false;
+            }
         }
-        catch(const boost::system::system_error& error){
-            const auto code = error.code();
+    );
 
-            if(
-                code == boost::asio::error::message_size ||
-                code == boost::asio::error::connection_reset
-            ){
-                DEBUG_LOG(
-                    "Discarded UDP receive error: "
-                    <<error.what()
-                    <<"\n"
-                );
+    try{
+        socket.Open();
+        socket.Bind(port);
+        socket.SetNonBlocking(true);
 
-                continue;
+        controlServer.Start();
+
+        while(running){
+            io_context.poll();
+
+            if(!running){
+                break;
             }
 
-            throw;
+            try{
+                HandleMessage();
+            }
+            catch(const boost::system::system_error& error){
+                const auto code = error.code();
+
+                if(
+                    code == boost::asio::error::would_block ||
+                    code == boost::asio::error::try_again
+                ){
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(2)
+                    );
+
+                    continue;
+                }
+
+                if(
+                    code == boost::asio::error::message_size ||
+                    code == boost::asio::error::connection_reset
+                ){
+                    continue;
+                }
+
+                throw;
+            }
         }
     }
+    catch(...){
+        running = false;
+
+        controlServer.Stop();
+        socket.Close();
+
+        throw;
+    }
+
+    controlServer.Stop();
+    socket.Close();
 }
 
 //this function sends the exact same voice packet to every client ecxept the sender

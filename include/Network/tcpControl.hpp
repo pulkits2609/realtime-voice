@@ -54,7 +54,8 @@ class TcpControlClient{
         bool Connect(
             const std::string& serverAddress,
             unsigned short serverPort,
-            const std::string& clientName
+            const std::string& clientName,
+            const std::atomic<bool>& sessionRunning
         );
 
         void StartReceive(
@@ -68,6 +69,7 @@ class TcpControlClient{
         void Disconnect();
 
         std::uint32_t GetClientId() const;
+        boost::asio::ip::address GetServerAddress() const;
 };
 
 class TcpControlServer{

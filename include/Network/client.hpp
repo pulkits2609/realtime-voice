@@ -48,6 +48,7 @@ class Client{
         //network packets waiting to process
         ThreadSafeQueue<std::vector<std::uint8_t>> networkQueue;
 
+        std::string serverAddress;
         std::string clientName;
         std::uint32_t clientId = 0;
 

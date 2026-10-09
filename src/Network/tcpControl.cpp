@@ -279,7 +279,8 @@ std::vector<std::uint8_t> TcpControlClient::ReceiveFrame(){
 bool TcpControlClient::Connect(
     const std::string& serverAddress,
     unsigned short serverPort,
-    const std::string& clientName
+    const std::string& clientName,
+    const std::atomic<bool>& sessionRunning
 ){
     Disconnect();
 
@@ -290,44 +291,73 @@ bool TcpControlClient::Connect(
             );
         }
 
-        boost::asio::ip::tcp::resolver resolver(io_context);
+        using Tcp = boost::asio::ip::tcp;
 
-        const auto endpoints = resolver.resolve(
-            boost::asio::ip::tcp::v4(),
-            serverAddress,
-            std::to_string(serverPort)
-        );
+        Tcp::resolver resolver(io_context);
 
         bool completed = false;
+        bool cancelled = false;
+
         boost::system::error_code connectionError;
 
         io_context.restart();
 
-        boost::asio::async_connect(
-            socket,
-            endpoints,
-            [&](
-                const boost::system::error_code& error,
-                const boost::asio::ip::tcp::endpoint&
-            ){
-                connectionError = error;
-                completed = true;
+        resolver.async_resolve(
+            Tcp::v4(),
+            serverAddress,
+            std::to_string(serverPort),
+            [&](const boost::system::error_code& error,
+                Tcp::resolver::results_type endpoints){
+
+                if(error || cancelled || !sessionRunning){
+                    connectionError = error
+                        ? error
+                        : boost::asio::error::operation_aborted;
+
+                    completed = true;
+                    return;
+                }
+
+                boost::asio::async_connect(
+                    socket,
+                    endpoints,
+                    [&](const boost::system::error_code& error,
+                        const Tcp::endpoint&){
+
+                        connectionError = error;
+                        completed = true;
+                    }
+                );
             }
         );
 
-        io_context.run_for(connectTimeout);
+        const auto deadline = Clock::now() + connectTimeout;
 
-        if(!completed){
+        while(
+            !completed &&
+            sessionRunning &&
+            Clock::now() < deadline
+        ){
+            io_context.run_for(pollInterval);
+        }
+
+        if(!completed || !sessionRunning){
+            cancelled = true;
+            resolver.cancel();
+
             boost::system::error_code ignored;
             socket.cancel(ignored);
 
-            // Finish the cancelled operation before its
-            // callback's local references go out of scope.
-            io_context.restart();
-            io_context.run();
+            // Finish callbacks before their local references expire.
+            while(!completed){
+                io_context.restart();
+                io_context.run_for(pollInterval);
+            }
 
             throw std::runtime_error(
-                "TCP connection timed out"
+                sessionRunning
+                    ? "Server lookup / connection timed out"
+                    : "Connection stopped"
             );
         }
 
@@ -350,9 +380,15 @@ bool TcpControlClient::Connect(
             clientName.end()
         );
 
-        SendFrame(joinMessage);
+        const IsAlive alive = [this, &sessionRunning](){
+            io_context.poll();
 
-        const auto response = ReceiveFrame();
+            return running.load() && sessionRunning.load();
+        };
+
+        WriteControlFrame(socket, joinMessage, alive);
+
+        const auto response = ReadControlFrame(socket, alive);
 
         if(
             response.size() != 5 ||
@@ -376,10 +412,12 @@ bool TcpControlClient::Connect(
         return true;
     }
     catch(const std::exception& error){
-        std::cerr
-            <<"TCP connection failed: "
-            <<error.what()
-            <<"\n";
+        if(sessionRunning){
+            std::cerr
+                <<"TCP connection failed: "
+                <<error.what()
+                <<"\n";
+        }
 
         Disconnect();
         return false;
@@ -528,6 +566,10 @@ void TcpControlClient::Disconnect(){
 
 std::uint32_t TcpControlClient::GetClientId() const{
     return clientId;
+}
+
+boost::asio::ip::address TcpControlClient::GetServerAddress() const{
+    return socket.remote_endpoint().address();
 }
 
 // Server implementation

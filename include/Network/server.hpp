@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <mutex>
 #include <vector>
+#include <atomic>
 
 class Server{
     private:
@@ -22,6 +23,7 @@ class Server{
         boost::asio::io_context io_context;
         UdpSocket socket;
         unsigned short port;
+        std::atomic<bool> running{false};
 
         struct ClientInfo{
             std::uint32_t clientId;

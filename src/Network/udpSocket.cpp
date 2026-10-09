@@ -32,10 +32,25 @@ void UdpSocket::SendTo(
     const std::vector<std::uint8_t>& data,
     const boost::asio::ip::udp::endpoint& endpoint
 ){
+    boost::system::error_code error;
+
     socket.send_to(
         boost::asio::buffer(data),
-        endpoint
+        endpoint,
+        0,
+        error
     );
+
+    if(
+        error == boost::asio::error::would_block ||
+        error == boost::asio::error::try_again
+    ){
+        return;
+    }
+
+    if(error){
+        throw boost::system::system_error(error);
+    }
 }
 
 std::vector<std::uint8_t> UdpSocket::ReceiveFrom(
