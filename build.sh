@@ -8,22 +8,46 @@ BUILD_DIR="$PROJECT_DIR/build"
 
 cd "$PROJECT_DIR"
 
-# Validate arguments
-if [[ $# -gt 1 ]] || { [[ $# -eq 1 ]] && [[ "$1" != "-clean" ]]; }; then
-    echo "Usage: ./build.sh [-clean]"
+# Validate all arguments before performing any work.
+BUILD_TYPE=Debug
+EXPLICIT_MODE=""
+CLEAN_BUILD=false
+usage() {
+    echo "Usage: ./build.sh [-debug | -release] [-clean]" >&2
+    echo "Default: Debug. Flags may be entered in any order." >&2
     exit 1
-fi
+}
+for argument in "$@"; do
+    case "$argument" in
+        -clean) CLEAN_BUILD=true ;;
+        -debug|-release)
+            mode=Debug
+            [[ "$argument" != -release ]] || mode=Release
+            if [[ -n "$EXPLICIT_MODE" && "$EXPLICIT_MODE" != "$mode" ]]; then
+                echo "ERROR: -debug and -release cannot be used together." >&2
+                usage
+            fi
+            EXPLICIT_MODE="$mode"
+            BUILD_TYPE="$mode"
+            ;;
+        *) usage ;;
+    esac
+done
 
 # Clean only when explicitly requested
-if [[ "${1:-}" == "-clean" ]]; then
+if "$CLEAN_BUILD"; then
+    [[ "$BUILD_DIR" == "$PROJECT_DIR/build" && ! -L "$BUILD_DIR" ]] || {
+        echo "ERROR: Unsafe build directory." >&2
+        exit 1
+    }
     echo "Cleaning previous build..."
-    rm -rf "$BUILD_DIR"
+    rm -rf -- "$BUILD_DIR"
 fi
 
-echo "Configuring Ubuntu Release build..."
+echo "Configuring Ubuntu $BUILD_TYPE build..."
 
 cmake -S "$PROJECT_DIR" -B "$BUILD_DIR" \
-    -DCMAKE_BUILD_TYPE=Release
+    -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
 
 echo "Building project..."
 
