@@ -4,6 +4,8 @@
 #include <thread>
 #include <array>
 #include "Common/debugLog.hpp"
+#include <chrono>
+#include <stdexcept>
 
 Client::Client(
     const std::string& serverAddress,
@@ -22,7 +24,8 @@ encoder(),
 audioPlayback(),
 networkQueue(8),
 clientName(clientName),
-controlClient(io_context){
+controlClient(io_context),
+controlQueue(0){
 
 }
 
@@ -56,170 +59,174 @@ std::string Client::ReceiveMessage(){
 }
 
 void Client::Run(){
-    if(!controlClient.Connect(
-        serverEndpoint.address().to_string(),
-        serverEndpoint.port(),
-        clientName
-    )){
-        std::cerr<<"Unable to Connect to voice server\n";
+    running = true;
 
-        return;
-    }
-    
-    clientId = controlClient.GetClientId();
+    try{
+        if(!controlClient.Connect(
+            serverEndpoint.address().to_string(),
+            serverEndpoint.port(),
+            clientName
+        )){
+            throw std::runtime_error(
+                "Unable to connect to voice server"
+            );
+        }
 
-    std::cout<<"Connected to server as : "<<clientName<<" | Client ID: "<<clientId<<"\n";
+        clientId = controlClient.GetClientId();
 
-    controlClient.StartReceive(
-        [this](
-            ControlMessageType type,
-            std::uint32_t remoteClientId,
-            const std::string& remoteClientName
-        ){
+        std::cout
+            <<"Connected to server as : "
+            <<clientName
+            <<" | Client ID: "
+            <<clientId
+            <<"\n";
 
-            controlQueue.Push(
-                ControlEvent{
-                    type,
-                    remoteClientId,
-                    remoteClientName
+        controlClient.StartReceive(
+            [this](
+                ControlMessageType type,
+                std::uint32_t remoteClientId,
+                const std::string& remoteClientName
+            ){
+                controlQueue.Push(
+                    ControlEvent{
+                        type,
+                        remoteClientId,
+                        remoteClientName
+                    }
+                );
+
+                if(type == ControlMessageType::ServerDisconnected){
+                    running = false;
                 }
+            }
+        );
+
+        if(!encoder.Initialize(48000, 1, 32000)){
+            throw std::runtime_error(
+                "Failed to initialize Opus encoder"
             );
         }
-    );
 
-    //initialize Opus
-    if(!encoder.Initialize(
-        48000,1,32000
-    )){
-        std::cerr<<"Failed to initialize Opus Encoder\n";
+        socket.Open();
+        socket.Bind(0);
+        socket.SetNonBlocking(true);
 
-        return;
-    }
-
-    //open UDP Socket
-    socket.Open();
-    socket.Bind(0); //let operating system choose an available local UDP Port
-
-    const bool audioInitialized = audioCapture.Initialize(
-        [this](
-            const float* samples,
-            std::size_t sampleCount
-        ){
-            HandleCapture(
-                samples,sampleCount
-            );
-        }
-    ); //now the buffer belongs to the client
-
-    //starting the audio device
-    if(!audioInitialized){
-        std::cerr<<"Failed to initialize microphone\n";
-        
-        return;
-    }
-
-    if(!audioCapture.Start()){
-        std::cerr<<"Failed to start microphone\n";
-        
-        return;
-    }
-    //now Client Run has responsibility for starting microphone
-
-    //initializing speaker playback
-    if(!audioPlayback.Initialize()){
-        std::cerr<<"Failed to initialize audioPlayback\n";
-
-        return;
-    }
-
-    //starting speaker playback
-    if(!audioPlayback.Start()){
-        std::cerr<<"Failed to start audio Playback\n";
-
-        return;
-    }
-
-    //now in a separate thread we start receiving our voice packets
-    std::thread receiveThread(
-        &Client::ReceiveVoice,
-        this
-    );
-
-    receiveThread.detach();
-
-    //processing buffers
-    std::array<float,960> frame{};
-
-    std::array<std::uint8_t,4000> encodedData{};
-
-    std::uint32_t sequenceNumber = 0;
-
-    while(true){
-
-        //take captured audio from capture queue
-        std::vector<float> capturedSamples;
-        if(captureQueue.Pop(
-            capturedSamples
+        if(!audioCapture.Initialize(
+            [this](
+                const float* samples,
+                std::size_t sampleCount
+            ){
+                HandleCapture(samples, sampleCount);
+            }
         )){
-            pcmBuffer.Push(
-                capturedSamples.data(),
-                capturedSamples.size()
+            throw std::runtime_error(
+                "Failed to initialize microphone"
             );
         }
 
-        if(pcmBuffer.PopExact(
-            frame.data(),
-            frame.size()
-        )){
-            const int encodedBytes = encoder.Encode(
-                frame.data(),
-                static_cast<int>(frame.size()),
-                encodedData.data(),
-                static_cast<int>(encodedData.size())
+        if(!audioCapture.Start()){
+            throw std::runtime_error(
+                "Failed to start microphone"
             );
-        
-            if(encodedBytes < 0){
-                std::cerr<<"Opus Encode Failed :"<<opus_strerror(encodedBytes)<<"\n";
-                continue;
+        }
+
+        if(!audioPlayback.Initialize()){
+            throw std::runtime_error(
+                "Failed to initialize audio playback"
+            );
+        }
+
+        if(!audioPlayback.Start()){
+            throw std::runtime_error(
+                "Failed to start audio playback"
+            );
+        }
+
+        if(!running){
+            throw std::runtime_error(
+                "Server connection was lost during startup"
+            );
+        }
+
+        receiveThread = std::thread(
+            &Client::ReceiveVoice,
+            this
+        );
+
+        std::array<float,960> frame{};
+        std::array<std::uint8_t,4000> encodedData{};
+
+        std::uint32_t sequenceNumber = 0;
+
+        while(running){
+            ProcessControlEvents();
+
+            if(!running){
+                break;
             }
 
-            //we create a Voice Packet using encoded Opus Data
-            const std::vector<std::uint8_t> opusPayload(
-                encodedData.begin(),
-                encodedData.begin()+encodedBytes
-            );
+            std::vector<float> capturedSamples;
 
-            Packet voicePacket(
-                PacketType::Voice,
-                opusPayload
-            );
+            if(captureQueue.Pop(capturedSamples)){
+                pcmBuffer.Push(
+                    capturedSamples.data(),
+                    capturedSamples.size()
+                );
+            }
 
-            voicePacket.SetClientId(
-                clientId
-            );
+            if(pcmBuffer.PopExact(
+                frame.data(),
+                frame.size()
+            )){
+                const int encodedBytes = encoder.Encode(
+                    frame.data(),
+                    static_cast<int>(frame.size()),
+                    encodedData.data(),
+                    static_cast<int>(encodedData.size())
+                );
 
-            voicePacket.SetSequenceNumber(
-                ++sequenceNumber
-            );
+                if(encodedBytes < 0){
+                    std::cerr
+                        <<"Opus encode failed: "
+                        <<opus_strerror(encodedBytes)
+                        <<"\n";
 
-            //converting the voice packet to bytes
-            const std::vector<std::uint8_t> voiceData = voicePacket.Serialize();
+                    continue;
+                }
 
-            //sending serialized voice packet to server
-            socket.SendTo(
-                voiceData,
-                serverEndpoint
-            );
+                const std::vector<std::uint8_t> opusPayload(
+                    encodedData.begin(),
+                    encodedData.begin() + encodedBytes
+                );
+
+                Packet voicePacket(
+                    PacketType::Voice,
+                    opusPayload
+                );
+
+                voicePacket.SetClientId(clientId);
+                voicePacket.SetSequenceNumber(++sequenceNumber);
+
+                socket.SendTo(
+                    voicePacket.Serialize(),
+                    serverEndpoint
+                );
+            }
+
+            ProcessReceivedVoice();
         }
 
+        // including a final server-disconnect notification
+        // if it causes the processing loop to exit
         ProcessControlEvents();
-        ProcessReceivedVoice();
+
+        Stop();
+    }
+    catch(...){
+        Stop();
+        throw;
     }
 }
-
-//previously : MiniAudio callback -> HandleCapture -> PcmBuffer
-
-//now : MiniAudio Callback -> HandleCapture -> CaptureQueue -> Client Processing -> PcmBuffer
 
 void Client::HandleCapture(
     const float* samples,
@@ -235,24 +242,61 @@ void Client::HandleCapture(
     );
 }
 
-//now this thread only has a single job
 void Client::ReceiveVoice(){
     boost::asio::ip::udp::endpoint sender;
 
-    while(true){
-        std::vector<std::uint8_t> data = socket.ReceiveFrom(
-            sender
-        );
+    while(running){
+        try{
+            std::vector<std::uint8_t> data =
+                socket.ReceiveFrom(sender);
 
-        if(data.empty()){
-            continue;
-        }
+            if(data.empty() || sender != serverEndpoint){
+                continue;
+            }
 
-        //only accept packets coming from our server
-        if(sender != serverEndpoint){
-            continue;
+            networkQueue.Push(std::move(data));
         }
-        networkQueue.Push(std::move(data));
+        catch(const boost::system::system_error& error){
+            if(!running){
+                break;
+            }
+
+            const auto code = error.code();
+
+            if(
+                code == boost::asio::error::would_block ||
+                code == boost::asio::error::try_again
+            ){
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(2)
+                );
+                continue;
+            }
+
+            // Discard an oversized datagram or a transient
+            // UDP reset. TCP heartbeat determines session life.
+            if(
+                code == boost::asio::error::message_size ||
+                code == boost::asio::error::connection_reset
+            ){
+                continue;
+            }
+
+            std::cerr
+                <<"UDP receive failed: "
+                <<error.what()
+                <<"\n";
+
+            running = false;
+        }
+        catch(const std::exception& error){
+            std::cerr
+                <<"Voice receiver failed: "
+                <<error.what()
+                <<"\n";
+
+            running = false;
+        }
     }
 }
 
@@ -264,6 +308,12 @@ void Client::ProcessReceivedVoice(){
     while(networkQueue.Pop(
         data
     )){
+
+        ProcessControlEvents();
+
+        if(!running){
+            return;
+        }
 
         Packet packet;
 
@@ -284,7 +334,7 @@ void Client::ProcessReceivedVoice(){
 
         //ignore our own packets if they somehow
         //reach us
-        if(senderClientId == clientId){
+        if(senderClientId == 0 || senderClientId == clientId || activeClients.find(senderClientId) == activeClients.end()){
             continue;
         }
 
@@ -347,15 +397,16 @@ void Client::ProcessReceivedVoice(){
             remoteClient.receivedFirstPacket = true;
         }
 
-        //packet is older than what we expect
-        //so it is late or duplicate
-        if(
-            sequenceNumber <
-            remoteClient.expectedSequenceNumber
-        ){
+        const std::uint32_t sequenceDistance =
+            sequenceNumber - remoteClient.expectedSequenceNumber;
 
+        if(sequenceDistance >= 0x80000000u){
             DEBUG_LOG(
-                "Out of Order / Duplicate Packet : Client "<<senderClientId<<" : sequence "<<sequenceNumber<<"\n"
+                "Late / Duplicate Packet : Client "
+                <<senderClientId
+                <<" : sequence "
+                <<sequenceNumber
+                <<"\n"
             );
 
             continue;
@@ -510,37 +561,79 @@ void Client::ProcessReceivedVoice(){
 }
 
 Client::~Client(){
-    audioPlayback.Stop();
-    audioCapture.Stop();
+    Stop();
 }
 
 void Client::ProcessControlEvents(){
     ControlEvent event;
-    while(controlQueue.Pop(
-        event
-    )){
-        if(
-            event.type ==
-            ControlMessageType::ClientConnected
-        ){
-            std::cout<<
-                "Remote Client Added : "
-                <<event.clientName
-                <<" | ID : "
-                <<event.clientId
-                <<"\n";
+
+    while(controlQueue.Pop(event)){
+        if(event.type == ControlMessageType::ServerDisconnected){
+            running = false;
+
+            activeClients.clear();
+            remoteClients.clear();
+
+            std::cout
+                <<"Server disconnected; voice session ended\n";
+
+            return;
+        }
+
+        if(event.clientId == 0 || event.clientId == clientId){
+            continue;
+        }
+
+        if(event.type == ControlMessageType::ClientConnected){
+            const auto [iterator, inserted] =
+                activeClients.emplace(
+                    event.clientId,
+                    event.clientName
+                );
+
+            if(inserted){
+                std::cout
+                    <<"Remote Client Added : "
+                    <<event.clientName
+                    <<" | ID : "
+                    <<event.clientId
+                    <<"\n";
+            }
         }
         else if(
-            event.type ==
-            ControlMessageType::ClientDisconnected
+            event.type == ControlMessageType::ClientDisconnected
         ){
-            if(
-                remoteClients.erase(
-                    event.clientId
-                ) > 0
-            ){
-                std::cout<<"Remote Client Disconnected : "<<event.clientId<<"\n";
+            const bool wasActive =
+                activeClients.erase(event.clientId) > 0;
+
+            remoteClients.erase(event.clientId);
+
+            if(wasActive){
+                std::cout
+                    <<"Remote Client Disconnected : "
+                    <<event.clientId
+                    <<"\n";
             }
         }
     }
+}
+
+void Client::Stop(){
+    running = false;
+
+    // Stop capture callbacks while their queues still exist.
+    audioCapture.Stop();
+    audioPlayback.Stop();
+
+    controlClient.Disconnect();
+
+    if(receiveThread.joinable()){
+        receiveThread.join();
+    }
+
+    // The UDP receiver has finished before socket closure.
+    socket.Close();
+
+    activeClients.clear();
+    remoteClients.clear();
 }

@@ -51,6 +51,17 @@ std::vector<std::uint8_t> UdpSocket::ReceiveFrom(
     // return std::string(buffer.data(), bytesReceived);
     return std::vector<std::uint8_t>(
         buffer.begin(),
-        buffer.end()+bytesReceived
+        buffer.begin()+bytesReceived //
     );
+}
+
+void UdpSocket::SetNonBlocking(
+    bool enabled
+){
+    socket.non_blocking(enabled);
+}
+
+void UdpSocket::Close(){
+    boost::system::error_code ignored;
+    socket.close(ignored);
 }

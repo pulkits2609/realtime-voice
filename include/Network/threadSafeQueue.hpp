@@ -66,7 +66,7 @@ void ThreadSafeQueue<T>::Push(
         mutex
     );
 
-    if(queue.size() >= maxSize){
+    if(maxSize != 0 && queue.size() >= maxSize){
         queue.pop();
     }
 
@@ -83,7 +83,7 @@ void ThreadSafeQueue<T>::Push(
         mutex
     );
 
-    if(queue.size() >= maxSize){
+    if(maxSize != 0 && queue.size() >= maxSize){
         queue.pop();
     }
 
@@ -102,7 +102,7 @@ bool ThreadSafeQueue<T>::Pop(
     if(queue.empty()){
         return false;
     }
-    value = queue.front();
+    value = std::move(queue.front());
     queue.pop();
     return true;
 }

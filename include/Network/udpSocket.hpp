@@ -38,4 +38,10 @@ class UdpSocket{
         std::vector<std::uint8_t> ReceiveFrom(
             boost::asio::ip::udp::endpoint& sender
         );
+
+        void SetNonBlocking(
+            bool enabled
+        );
+
+        void Close();
 };

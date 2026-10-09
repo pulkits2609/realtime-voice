@@ -107,15 +107,38 @@ void Server::HandleMessage(){
 
 void Server::Run(){
     socket.Open();
-
     socket.Bind(port);
 
     controlServer.Start();
 
-    DEBUG_LOG("Server Started on UDP Port : "<<port<<"\n");
+    DEBUG_LOG(
+        "Server Started on UDP Port : "
+        <<port
+        <<"\n"
+    );
 
     while(true){
-        HandleMessage(); //now the server continuously receives packets
+        try{
+            HandleMessage();
+        }
+        catch(const boost::system::system_error& error){
+            const auto code = error.code();
+
+            if(
+                code == boost::asio::error::message_size ||
+                code == boost::asio::error::connection_reset
+            ){
+                DEBUG_LOG(
+                    "Discarded UDP receive error: "
+                    <<error.what()
+                    <<"\n"
+                );
+
+                continue;
+            }
+
+            throw;
+        }
     }
 }
 
@@ -125,49 +148,53 @@ void Server::RelayVoicePacket(
     const std::vector<std::uint8_t>& data,
     std::uint32_t senderClientId
 ){
-
     std::vector<
         boost::asio::ip::udp::endpoint
     > recipients;
 
     {
-        std::lock_guard<std::mutex> lock(
-            clientsMutex
-        );
+        std::lock_guard<std::mutex> lock(clientsMutex);
+
+        bool senderActive = false;
 
         for(const auto& client : clients){
-
             if(
-                client.clientId ==
-                senderClientId
+                client.clientId == senderClientId &&
+                client.udpRegistered
             ){
-                continue;
+                senderActive = true;
+                break;
             }
+        }
 
-            if(!client.udpRegistered){
-                continue;
+        // The TCP handler may have removed the sender
+        // after its UDP packet was initially validated.
+        if(!senderActive){
+            return;
+        }
+
+        for(const auto& client : clients){
+            if(
+                client.clientId != senderClientId &&
+                client.udpRegistered
+            ){
+                recipients.push_back(client.endpoint);
             }
-
-            recipients.push_back(
-                client.endpoint
-            );
         }
     }
 
-    //send outside the mutex
     for(const auto& endpoint : recipients){
-
-        socket.SendTo(
-            data,
-            endpoint
-        );
+        try{
+            socket.SendTo(data, endpoint);
+        }
+        catch(const boost::system::system_error& error){
+            DEBUG_LOG(
+                "UDP relay failed: "
+                <<error.what()
+                <<"\n"
+            );
+        }
     }
-
-    DEBUG_LOG(
-        "Relayed Voice Packet to : "
-        <<recipients.size()
-        <<" clients\n"
-    );
 }
 
 void Server::HandleClientConnected(
@@ -225,19 +252,23 @@ bool Server::RegisterUdpClient(
     std::uint32_t clientId,
     const boost::asio::ip::udp::endpoint& endpoint
 ){
-
-    std::lock_guard<std::mutex> lock(
-        clientsMutex
-    );
+    std::lock_guard<std::mutex> lock(clientsMutex);
 
     for(auto& client : clients){
-
-        if(client.clientId == clientId){
-
-            client.endpoint = endpoint;
-            client.udpRegistered = true;
-            return true;
+        if(client.clientId != clientId){
+            continue;
         }
+
+        if(client.udpRegistered){
+            // Keep this session bound to its original endpoint.
+            return client.endpoint == endpoint;
+        }
+
+        client.endpoint = endpoint;
+        client.udpRegistered = true;
+
+        return true;
     }
+
     return false;
 }

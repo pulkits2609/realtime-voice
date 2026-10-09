@@ -24,6 +24,8 @@
 
 #include "Network/tcpControl.hpp"
 
+#include <atomic>
+
 class Client{
     private:
         boost::asio::io_context io_context;
@@ -50,6 +52,12 @@ class Client{
         std::uint32_t clientId = 0;
 
         TcpControlClient controlClient;
+
+        std::atomic<bool> running{false};
+        std::thread receiveThread;
+
+        // TCP membership is authoritative.
+        std::map<std::uint32_t, std::string> activeClients;
 
 
         //instead of a global state for all clients
@@ -94,6 +102,8 @@ class Client{
         void ProcessReceivedVoice();
 
         void ProcessControlEvents();
+
+        void Stop();
     
     public:
         Client(

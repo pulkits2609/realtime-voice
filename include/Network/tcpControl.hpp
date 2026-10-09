@@ -2,25 +2,41 @@
 
 #include <boost/asio.hpp>
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
+
+#include "Network/threadSafeQueue.hpp"
 
 enum class ControlMessageType : std::uint8_t{
     Join = 1,
     JoinAccepted = 2,
     ClientConnected = 3,
-    ClientDisconnected = 4
+    ClientDisconnected = 4,
+
+    Ping = 5,
+    Pong = 6,
+
+    // Local notification; never sent over TCP.
+    ServerDisconnected = 7
 };
 
 class TcpControlClient{
     private:
+        boost::asio::io_context& io_context;
         boost::asio::ip::tcp::socket socket;
+
         std::uint32_t clientId = 0;
+
+        std::atomic<bool> running{false};
+        std::thread receiveThread;
 
         void SendFrame(
             const std::vector<std::uint8_t>& payload
@@ -32,6 +48,8 @@ class TcpControlClient{
         explicit TcpControlClient(
             boost::asio::io_context& io_context
         );
+
+        ~TcpControlClient();
 
         bool Connect(
             const std::string& serverAddress,
@@ -47,45 +65,53 @@ class TcpControlClient{
             )> callback
         );
 
+        void Disconnect();
+
         std::uint32_t GetClientId() const;
 };
 
 class TcpControlServer{
-    private:    
+    private:
         struct ClientConnection{
-            std::uint32_t clientId;
+            std::uint32_t clientId = 0;
             std::string clientName;
 
             std::shared_ptr<
                 boost::asio::ip::tcp::socket
             > socket;
+
+            // Only this connection's writer sends TCP frames.
+            ThreadSafeQueue<
+                std::vector<std::uint8_t>
+            > outgoing{0};
+
+            std::atomic<bool> active{true};
         };
 
         boost::asio::io_context& io_context;
-
         boost::asio::ip::tcp::acceptor acceptor;
 
         std::map<
             std::uint32_t,
-            ClientConnection
+            std::shared_ptr<ClientConnection>
         > clients;
 
         std::mutex clientsMutex;
 
         std::thread acceptThread;
+        std::vector<std::future<void>> handlers;
 
-        bool running = false;
-
+        std::atomic<bool> running{false};
         std::uint32_t nextClientId = 1;
 
-        std::vector<std::uint8_t> ReceiveFrame(
-            boost::asio::ip::tcp::socket& socket
-        );
+        std::function<void(
+            std::uint32_t,
+            const std::string&
+        )> clientConnectedCallback;
 
-        void SendFrame(
-            boost::asio::ip::tcp::socket& socket,
-            const std::vector<std::uint8_t>& payload
-        );
+        std::function<void(
+            std::uint32_t
+        )> clientDisconnectedCallback;
 
         void AcceptLoop();
 
@@ -95,19 +121,11 @@ class TcpControlServer{
             > socket
         );
 
-        void Broadcast(
-            const std::vector<std::uint8_t>& payload,
-            std::uint32_t excludedClientId = 0
+        void RemoveClient(
+            const std::shared_ptr<ClientConnection>& client
         );
 
     public:
-        TcpControlServer(
-            boost::asio::io_context& io_context,
-            unsigned short port
-        );
-
-        void Start();
-
         using ClientConnectedCallback =
             std::function<void(
                 std::uint32_t,
@@ -119,9 +137,15 @@ class TcpControlServer{
                 std::uint32_t
             )>;
 
-        ClientConnectedCallback clientConnectedCallback;
+        TcpControlServer(
+            boost::asio::io_context& io_context,
+            unsigned short port
+        );
 
-        ClientDisconnectedCallback clientDisconnectedCallback;
+        ~TcpControlServer();
+
+        void Start();
+        void Stop();
 
         void SetClientConnectedCallback(
             ClientConnectedCallback callback
