@@ -19,9 +19,7 @@ audioCapture(),
 captureQueue(8),
 pcmBuffer(9600),
 encoder(),
-decoder(),
 audioPlayback(),
-jitterBuffer(3), //buffer is kept very small deliberately
 networkQueue(8),
 clientName(clientName),
 controlClient(io_context){
@@ -78,14 +76,14 @@ void Client::Run(){
             std::uint32_t remoteClientId,
             const std::string& remoteClientName
         ){
-            if(type == ControlMessageType::ClientConnected){
-                std::cout<<"Remote Client Connected : "<<remoteClientName<<" | Client ID : "<<remoteClientId<<"\n";
-            }
-            else if(
-                type == ControlMessageType::ClientDisconnected
-            ){
-                std::cout<<"Remote Client Disconnected  ID: "<<remoteClientId<<"\n";
-            }
+
+            controlQueue.Push(
+                ControlEvent{
+                    type,
+                    remoteClientId,
+                    remoteClientName
+                }
+            );
         }
     );
 
@@ -94,11 +92,6 @@ void Client::Run(){
         48000,1,32000
     )){
         std::cerr<<"Failed to initialize Opus Encoder\n";
-
-        return;
-    }
-    if(!decoder.Initialize(48000,1)){
-        std::cerr<<"Failed to initialize Opus Decoder\n";
 
         return;
     }
@@ -201,6 +194,10 @@ void Client::Run(){
                 opusPayload
             );
 
+            voicePacket.SetClientId(
+                clientId
+            );
+
             voicePacket.SetSequenceNumber(
                 ++sequenceNumber
             );
@@ -215,12 +212,8 @@ void Client::Run(){
             );
         }
 
+        ProcessControlEvents();
         ProcessReceivedVoice();
-
-        // //prevent this processing loop from continously consuming CPU
-        // std::this_thread::sleep_for(
-        //     std::chrono::milliseconds(1)
-        // );
     }
 }
 
@@ -268,80 +261,135 @@ void Client::ProcessReceivedVoice(){
 
     std::vector<std::uint8_t> data;
 
-    while(networkQueue.Pop(data)){
+    while(networkQueue.Pop(
+        data
+    )){
 
         Packet packet;
 
         if(!packet.Deserialize(data)){
-            std::cerr<<"Received Invalid Voice packet\n";
+
+            std::cerr
+                <<"Received Invalid Voice packet\n";
 
             continue;
         }
 
-        //ignore other type of packets
         if(packet.GetType() != PacketType::Voice){
             continue;
         }
 
-        const std::uint32_t sequenceNumber = packet.GetSequenceNumber();
+        const std::uint32_t senderClientId =
+            packet.GetClientId();
 
-        const std::vector<std::uint8_t>& payload = packet.GetPayload();
+        //ignore our own packets if they somehow
+        //reach us
+        if(senderClientId == clientId){
+            continue;
+        }
+
+        const std::uint32_t sequenceNumber =
+            packet.GetSequenceNumber();
+
+        const std::vector<std::uint8_t>& payload =
+            packet.GetPayload();
 
         if(payload.empty()){
             continue;
         }
 
-        //the first packet tells where the sequence starts
-        if(!receivedFirstPacket){
+        //get this remote client's audio state
+        auto [
+            remoteClientIterator,
+            inserted
+        ] = remoteClients.try_emplace(
+            senderClientId
+        );
 
-            expectedSequenceNumber =
-                sequenceNumber;
+        RemoteClientState& remoteClient =
+            remoteClientIterator->second;
 
-            receivedFirstPacket = true;
+        //initialize decoder when we first
+        //see this remote client
+        if(inserted){
+
+            if(!remoteClient.decoder.Initialize(
+                48000,
+                1
+            )){
+
+                std::cerr
+                    <<"Failed to initialize decoder for Client "
+                    <<senderClientId
+                    <<"\n";
+
+                remoteClients.erase(
+                    remoteClientIterator
+                );
+
+                continue;
+            }
+
+            DEBUG_LOG(
+                "Created Audio State for Client "
+                <<senderClientId
+                <<"\n"
+            );
         }
 
-        //if packet is older than what we already expect
-        //it is either late or duplicate
+        //first packet establishes this client's
+        //sequence starting point
+        if(!remoteClient.receivedFirstPacket){
+
+            remoteClient.expectedSequenceNumber =
+                sequenceNumber;
+
+            remoteClient.receivedFirstPacket = true;
+        }
+
+        //packet is older than what we expect
+        //so it is late or duplicate
         if(
             sequenceNumber <
-            expectedSequenceNumber
+            remoteClient.expectedSequenceNumber
         ){
 
             DEBUG_LOG(
-                <<"Out of Order / Duplicate Packet : "
-                <<sequenceNumber
-                <<"\n");
+                "Out of Order / Duplicate Packet : Client "<<senderClientId<<" : sequence "<<sequenceNumber<<"\n"
+            );
 
             continue;
         }
 
-        //store packet inside jitter buffer
-        if(!jitterBuffer.Push(
+        //store packet inside this client's
+        //jitter buffer
+        if(!remoteClient.jitterBuffer.Push(
             sequenceNumber,
             payload
         )){
-
             DEBUG_LOG(
-                <<"Duplicate / Full Jitter Buffer : "
-                <<sequenceNumber
-                <<"\n");
+                "Duplicate / Full Jitter Buffer : Client "<<senderClientId<<" : sequence "<<sequenceNumber<<"\n"
+            );
 
             continue;
         }
 
-        //wait until jitter buffer has a few packets
-        //before starting playback
+        //wait until three packets are buffered
         if(
-            !jitterBufferStarted &&
-            jitterBuffer.Size() >= 3
+            !remoteClient.jitterBufferStarted &&
+            remoteClient.jitterBuffer.Size() >= 3
         ){
 
-            jitterBufferStarted = true;
+            remoteClient.jitterBufferStarted = true;
 
-            DEBUG_LOG("Jitter Buffer Started\n");
+            DEBUG_LOG(
+                "Jitter Buffer Started for Client "
+                <<senderClientId
+                <<"\n"
+            );
         }
 
-        if(!jitterBufferStarted){
+        if(!remoteClient.jitterBufferStarted){
             continue;
         }
 
@@ -351,14 +399,15 @@ void Client::ProcessReceivedVoice(){
 
             std::vector<std::uint8_t> nextPayload;
 
-            //try to get exactly the packet we are expecting
-            if(jitterBuffer.Pop(
-                expectedSequenceNumber,
+            //try to get exactly the packet
+            //we are expecting
+            if(remoteClient.jitterBuffer.Pop(
+                remoteClient.expectedSequenceNumber,
                 nextPayload
             )){
 
                 const int decodedSamples =
-                    decoder.Decode(
+                    remoteClient.decoder.Decode(
                         nextPayload.data(),
                         static_cast<int>(
                             nextPayload.size()
@@ -378,7 +427,7 @@ void Client::ProcessReceivedVoice(){
                         )
                         <<"\n";
 
-                    expectedSequenceNumber++;
+                    remoteClient.expectedSequenceNumber++;
 
                     continue;
                 }
@@ -390,37 +439,38 @@ void Client::ProcessReceivedVoice(){
                     )
                 );
 
-                frameNumber++;
-
+                remoteClient.frameNumber++;
+                
+                //this cout was very long..... bruhhh
                 DEBUG_LOG(
-                    <<"Received Voice Packet : "
-                    <<frameNumber
+                    "Received Voice Packet : Client "
+                    <<senderClientId
+                    <<" : frame "
+                    <<remoteClient.frameNumber
                     <<" : sequence "
-                    <<expectedSequenceNumber
+                    <<remoteClient.expectedSequenceNumber
                     <<" : "
                     <<nextPayload.size()
                     <<"bytes, decoded "
                     <<decodedSamples
-                    <<" samples\n");
+                    <<" samples\n"
+                );
 
-                expectedSequenceNumber++;
+                remoteClient.expectedSequenceNumber++;
 
                 continue;
             }
 
-            //expected packet missing
-            //if we already have 3 packets waiting,
-            //assume the packet was lost
-            if(jitterBuffer.Size() >= 3){
+            //expected packet is missing
+            if(remoteClient.jitterBuffer.Size() >= 3){
 
                 DEBUG_LOG(
-                    <<"Packet Loss Detected : sequence "
-                    <<expectedSequenceNumber
-                    <<"\n");
+                    "Packet Loss Detected : Client "<<senderClientId<<" : sequence "<<remoteClient.expectedSequenceNumber<<"\n"
+                );
 
-                //tell Opus that packet was lost
+                //tell Opus that the packet was lost
                 const int decodedSamples =
-                    decoder.Decode(
+                    remoteClient.decoder.Decode(
                         nullptr,
                         0,
                         decodedFrame.data(),
@@ -430,21 +480,14 @@ void Client::ProcessReceivedVoice(){
                     );
 
                 if(decodedSamples < 0){
-
                     std::cerr
-                        <<"Opus PLC Failed : "
-                        <<opus_strerror(
+                        <<"Opus PLC Failed : "<<opus_strerror(
                             decodedSamples
-                        )
-                        <<"\n";
-
-                    expectedSequenceNumber++;
-
+                        )<<"\n";
+                    remoteClient.expectedSequenceNumber++;
                     continue;
                 }
 
-                //send generated replacement PCM
-                //to the speaker buffer
                 audioPlayback.Push(
                     decodedFrame.data(),
                     static_cast<std::size_t>(
@@ -453,11 +496,10 @@ void Client::ProcessReceivedVoice(){
                 );
 
                 DEBUG_LOG(
-                    <<"Generated PLC Audio for sequence "
-                    <<expectedSequenceNumber
-                    <<"\n");
+                    "Generated PLC Audio : Client "<<senderClientId<<" : sequence "<<remoteClient.expectedSequenceNumber<<"\n"
+                );
 
-                expectedSequenceNumber++;
+                remoteClient.expectedSequenceNumber++;
 
                 continue;
             }
@@ -470,4 +512,35 @@ void Client::ProcessReceivedVoice(){
 Client::~Client(){
     audioPlayback.Stop();
     audioCapture.Stop();
+}
+
+void Client::ProcessControlEvents(){
+    ControlEvent event;
+    while(controlQueue.Pop(
+        event
+    )){
+        if(
+            event.type ==
+            ControlMessageType::ClientConnected
+        ){
+            std::cout<<
+                "Remote Client Added : "
+                <<event.clientName
+                <<" | ID : "
+                <<event.clientId
+                <<"\n";
+        }
+        else if(
+            event.type ==
+            ControlMessageType::ClientDisconnected
+        ){
+            if(
+                remoteClients.erase(
+                    event.clientId
+                ) > 0
+            ){
+                std::cout<<"Remote Client Disconnected : "<<event.clientId<<"\n";
+            }
+        }
+    }
 }

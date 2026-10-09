@@ -12,59 +12,97 @@ controlServer(
     io_context,
     port
 ){
+    controlServer.SetClientConnectedCallback(
+        [this](
+            std::uint32_t clientId,
+            const std::string& clientName
+        ){
 
+            HandleClientConnected(
+                clientId,
+                clientName
+            );
+        }
+    );
+
+    controlServer.SetClientDisconnectedCallback(
+        [this](
+            std::uint32_t clientId
+        ){
+
+            HandleClientDisconnected(
+                clientId
+            );
+        }
+    );
 }
 
-//using the UdpSocket Class, we have abstracted away the network specific logic
 void Server::HandleMessage(){
+
     boost::asio::ip::udp::endpoint clientEndpoint;
 
     //server now receives bytes
-    const std::vector<std::uint8_t> data = socket.ReceiveFrom(
-        clientEndpoint
-    );
+    const std::vector<std::uint8_t> data =
+        socket.ReceiveFrom(
+            clientEndpoint
+        );
 
     Packet packet;
+
     if(!packet.Deserialize(data)){
-        DEBUG_LOG("Received Invalid Packet\n");
+
+        DEBUG_LOG(
+            "Received Invalid Packet\n"
+        );
+
         return;
     }
 
     if(packet.GetType() == PacketType::Voice){
-        //if this is a new client, add it to the list
 
-        if(!IsClientAlreadyConnected(clientEndpoint)){
-            clients.push_back(clientEndpoint);
-            
-            DEBUG_LOG("New Client Connected : "<<clientEndpoint.address().to_string()<<":"<<clientEndpoint.port()<<"\n");
+        const std::uint32_t clientId =
+            packet.GetClientId();
+
+        //associate this UDP endpoint with
+        //the client identity received over TCP
+        if(!RegisterUdpClient(
+            clientId,
+            clientEndpoint
+        )){
+
+            DEBUG_LOG(
+                "Received Voice Packet from Unknown Client ID : "
+                <<clientId
+                <<"\n"
+            );
+
+            return;
         }
 
-        DEBUG_LOG("Received Voice Packet : "<<packet.GetPayload().size()<<" bytes\n");
-        //voice doesnt require any decoding because server doesnt care, it just acts as a mediator for transmission
+        DEBUG_LOG(
+            "Received Voice Packet from Client "
+            <<clientId
+            <<" : "
+            <<packet.GetPayload().size()
+            <<" bytes\n"
+        );
 
-        //send this voice packet to every other client
         RelayVoicePacket(
-            data,clientEndpoint
+            data,
+            clientId
         );
 
         return;
     }
 
     if(packet.GetType() == PacketType::Text){
-        DEBUG_LOG("Client Message : "<<packet.GetTextMessage()<<"\n");
+
+        DEBUG_LOG(
+            "Client Message : "
+            <<packet.GetTextMessage()
+            <<"\n"
+        );
     }
-
-    Packet response(
-        PacketType::Text,
-        "Hello from Server"
-    );
-
-    const std::vector<std::uint8_t> responseData = response.Serialize();
-
-    socket.SendTo(
-        responseData,
-        clientEndpoint
-    );
 }
 
 void Server::Run(){
@@ -81,39 +119,125 @@ void Server::Run(){
     }
 }
 
-//check if the clients is aready present in the client list
-
-bool Server::IsClientAlreadyConnected(
-    const boost::asio::ip::udp::endpoint& clientEndpoint
-){
-    return std::find(
-        clients.begin(),
-        clients.end(),
-        clientEndpoint
-    ) != clients.end();
-}
-
 //this function sends the exact same voice packet to every client ecxept the sender
 
 void Server::RelayVoicePacket(
-    const std::vector<std::uint8_t> &data,
-    const boost::asio::ip::udp::endpoint& sender
+    const std::vector<std::uint8_t>& data,
+    std::uint32_t senderClientId
 ){
-    int clientsReached = 0;
 
-    for(int i=0; i<clients.size(); i++){
-        //we dont send packet back to the person who sent it 
-        if(clients[i] == sender){
-            continue;
-        }
+    std::vector<
+        boost::asio::ip::udp::endpoint
+    > recipients;
 
-        socket.SendTo(
-            data,clients[i]
+    {
+        std::lock_guard<std::mutex> lock(
+            clientsMutex
         );
 
-        clientsReached++;
-        
+        for(const auto& client : clients){
+
+            if(
+                client.clientId ==
+                senderClientId
+            ){
+                continue;
+            }
+
+            if(!client.udpRegistered){
+                continue;
+            }
+
+            recipients.push_back(
+                client.endpoint
+            );
+        }
     }
 
-    DEBUG_LOG("Relayed Voice Packet to : "<<clientsReached<<" clients\n");
+    //send outside the mutex
+    for(const auto& endpoint : recipients){
+
+        socket.SendTo(
+            data,
+            endpoint
+        );
+    }
+
+    DEBUG_LOG(
+        "Relayed Voice Packet to : "
+        <<recipients.size()
+        <<" clients\n"
+    );
+}
+
+void Server::HandleClientConnected(
+    std::uint32_t clientId,
+    const std::string& clientName
+){
+
+    std::lock_guard<std::mutex> lock(
+        clientsMutex
+    );
+
+    clients.push_back(
+        ClientInfo{
+            clientId,
+            clientName,
+            boost::asio::ip::udp::endpoint(),
+            false
+        }
+    );
+
+    DEBUG_LOG(
+        "Registered Client : "
+        <<clientName
+        <<" | ID : "
+        <<clientId
+        <<"\n"
+    );
+}
+
+void Server::HandleClientDisconnected(
+    std::uint32_t clientId
+){
+    std::lock_guard<std::mutex> lock(
+        clientsMutex
+    );
+
+    for(std::size_t i = 0; i < clients.size(); i++){
+        if(clients[i].clientId == clientId){
+            DEBUG_LOG(
+                "Removed Client : "
+                <<clientId
+                <<"\n"
+            );
+
+            clients.erase(
+                clients.begin() + i
+            );
+
+            return;
+        }
+    }
+}
+
+bool Server::RegisterUdpClient(
+    std::uint32_t clientId,
+    const boost::asio::ip::udp::endpoint& endpoint
+){
+
+    std::lock_guard<std::mutex> lock(
+        clientsMutex
+    );
+
+    for(auto& client : clients){
+
+        if(client.clientId == clientId){
+
+            client.endpoint = endpoint;
+            client.udpRegistered = true;
+            return true;
+        }
+    }
+    return false;
 }

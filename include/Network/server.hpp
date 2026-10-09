@@ -6,27 +6,49 @@
 #include "Network/udpSocket.hpp"
 
 #include "Network/tcpControl.hpp"
+#include <cstdint>
+#include <mutex>
+#include <vector>
 
 class Server{
     private:
         void HandleMessage();
-
-        bool IsClientAlreadyConnected(
-            const boost::asio::ip::udp::endpoint& clientEndpoint
-        );
         
         void RelayVoicePacket(
             const std::vector<std::uint8_t>& data,
-            const boost::asio::ip::udp::endpoint& sender
+            std::uint32_t senderClientId
         );
 
         boost::asio::io_context io_context;
         UdpSocket socket;
         unsigned short port;
 
-        std::vector<boost::asio::ip::udp::endpoint> clients;
+        struct ClientInfo{
+            std::uint32_t clientId;
+            std::string clientName;
+            boost::asio::ip::udp::endpoint endpoint;
+            bool udpRegistered = false;
+        };
+
+        std::vector<ClientInfo> clients;
+
+        std::mutex clientsMutex;
 
         TcpControlServer controlServer;
+
+        void HandleClientConnected(
+            std::uint32_t clientId,
+            const std::string& clientName
+        );
+
+        void HandleClientDisconnected(
+            std::uint32_t clientId
+        );
+
+        bool RegisterUdpClient(
+            std::uint32_t clientId,
+            const boost::asio::ip::udp::endpoint& endpoint
+        );
 
     public:
         explicit Server(unsigned short port);

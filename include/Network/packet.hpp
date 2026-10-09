@@ -15,6 +15,7 @@ class Packet{
         std::string message;
         std::vector<std::uint8_t> payload;
         std::uint32_t sequenceNumber = 0;
+        std::uint32_t clientId = 0;
     
     public:
         Packet();
@@ -46,5 +47,11 @@ class Packet{
         );
 
         std::uint32_t GetSequenceNumber() const;
+
+        void SetClientId(
+            std::uint32_t clientId
+        );
+
+        std::uint32_t GetClientId() const;
 };
 

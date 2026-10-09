@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <map>
 
 #include "Network/udpSocket.hpp"
 #include "Network/threadSafeQueue.hpp"
@@ -39,18 +40,8 @@ class Client{
         PcmBuffer pcmBuffer;
         
         OpusEncoderWrapper encoder;
-        OpusDecoderWrapper decoder;
 
         AudioPlayback audioPlayback;
-        JitterBuffer jitterBuffer;
-
-        std::uint32_t expectedSequenceNumber = 0;
-
-        bool receivedFirstPacket = false;
-
-        bool jitterBufferStarted = false;
-
-        int frameNumber = 0;
 
         //network packets waiting to process
         ThreadSafeQueue<std::vector<std::uint8_t>> networkQueue;
@@ -59,6 +50,36 @@ class Client{
         std::uint32_t clientId = 0;
 
         TcpControlClient controlClient;
+
+
+        //instead of a global state for all clients
+        //now each client will have their separate states
+        struct RemoteClientState{
+            JitterBuffer jitterBuffer;
+            OpusDecoderWrapper decoder;
+            std::uint32_t expectedSequenceNumber = 0;
+            bool receivedFirstPacket = false;
+            bool jitterBufferStarted = false;
+            int frameNumber = 0;
+
+            RemoteClientState():
+                jitterBuffer(3),
+                decoder(){
+
+            }
+        };
+
+        struct ControlEvent{
+            ControlMessageType type;
+            std::uint32_t clientId;
+            std::string clientName;
+        };
+
+        std::map<std::uint32_t,
+            RemoteClientState
+            > remoteClients;
+        
+        ThreadSafeQueue<ControlEvent> controlQueue;
         
         void SendMessage(
             const std::string& message
@@ -71,6 +92,8 @@ class Client{
         );
 
         void ProcessReceivedVoice();
+
+        void ProcessControlEvents();
     
     public:
         Client(

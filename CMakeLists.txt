@@ -1,4 +1,23 @@
+
 cmake_minimum_required(VERSION 3.16)
+
+# Optional vcpkg integration using VCPKG_ROOT
+# The toolchain must be configured before project()
+
+if(WIN32 AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+
+    if(DEFINED ENV{VCPKG_ROOT} AND
+       NOT "$ENV{VCPKG_ROOT}" STREQUAL "")
+
+        set(
+            CMAKE_TOOLCHAIN_FILE
+            "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+            CACHE STRING "vcpkg toolchain"
+        )
+
+    endif()
+
+endif()
 
 project(realtime_voice
     VERSION 1.0
@@ -13,41 +32,36 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # dependencies :
 
-# dependencies :
+# Boost.Asio headers
+# Search standard system paths, vcpkg and environment hints
 
-if(WIN32)
+find_path(
+    BOOST_INCLUDE_DIR
+    NAMES boost/asio.hpp
+    HINTS
+        ENV BOOST_INCLUDEDIR
+        ENV BOOST_ROOT
+    PATH_SUFFIXES
+        include
+)
 
-    # Boost 1.90 is installed manually on Windows
-    set(
-        BOOST_INCLUDE_DIR
-        "C:/Boost/include/boost-1_90"
-    )
+if(NOT BOOST_INCLUDE_DIR)
 
-    if(NOT EXISTS "${BOOST_INCLUDE_DIR}/boost")
-
-        message(FATAL_ERROR
-            "Boost headers not found at C:/Boost/include/boost-1_90"
-        )
-
-    endif()
-
-else()
-
-    # Linux uses the system Boost installation
-    find_package(
-        Boost
-        REQUIRED
-    )
-
-    set(
-        BOOST_INCLUDE_DIR
-        ${Boost_INCLUDE_DIRS}
+    message(FATAL_ERROR
+        "Boost.Asio headers not found. Install Boost or set BOOST_INCLUDEDIR."
     )
 
 endif()
 
-# Linux : Opus discovered through pkg config
-# Windows : Opus discovered through CMake/vcpkg
+message(STATUS "Boost headers: ${BOOST_INCLUDE_DIR}")
+
+# Threading support
+
+find_package(Threads REQUIRED)
+
+# Opus dependency
+# Windows : CMake package (typically via vcpkg)
+# Linux   : pkg-config
 
 if(WIN32)
 
@@ -71,6 +85,7 @@ else()
 endif()
 
 # VOICE SERVER
+
 add_executable(voice_server
 
     server/main.cpp
@@ -84,8 +99,8 @@ add_executable(voice_server
     src/Network/tcpControl.cpp
 )
 
-
 # VOICE CLIENT
+
 add_executable(voice_client
 
     client/main.cpp
@@ -106,11 +121,18 @@ add_executable(voice_client
     src/Network/tcpControl.cpp
 )
 
+# Debug configuration
+
 target_compile_definitions(voice_client PRIVATE
     $<$<CONFIG:Debug>:VOICE_DEBUG>
 )
 
-# common include directories
+target_compile_definitions(voice_server PRIVATE
+    $<$<CONFIG:Debug>:VOICE_DEBUG>
+)
+
+# Common include directories
+
 target_include_directories(voice_server PRIVATE
     ${PROJECT_SOURCE_DIR}/include
     ${BOOST_INCLUDE_DIR}
@@ -121,21 +143,21 @@ target_include_directories(voice_client PRIVATE
     ${BOOST_INCLUDE_DIR}
 )
 
-# server libraries
-target_link_libraries(
-    voice_server PRIVATE
+# Server libraries
 
-    ${OPUS_TARGET}
+target_link_libraries(voice_server PRIVATE
+    Threads::Threads
 )
 
-# client libraries
-target_link_libraries(
-    voice_client PRIVATE
+# Client libraries
 
+target_link_libraries(voice_client PRIVATE
     ${OPUS_TARGET}
+    Threads::Threads
 )
 
-# windows networking library
+# Windows networking library
+
 if(WIN32)
 
     target_link_libraries(voice_server PRIVATE
@@ -149,6 +171,7 @@ if(WIN32)
 endif()
 
 # Opus Test
+
 add_executable(opus_test
 
     src/Tests/opusTest.cpp
@@ -170,7 +193,8 @@ target_link_libraries(opus_test PRIVATE
     ${OPUS_TARGET}
 )
 
-# voice packet test
+# Voice Packet Test
+
 add_executable(voice_packet_test
 
     src/Tests/voicePacketTest.cpp

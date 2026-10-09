@@ -107,4 +107,27 @@ class TcpControlServer{
         );
 
         void Start();
+
+        using ClientConnectedCallback =
+            std::function<void(
+                std::uint32_t,
+                const std::string&
+            )>;
+
+        using ClientDisconnectedCallback =
+            std::function<void(
+                std::uint32_t
+            )>;
+
+        ClientConnectedCallback clientConnectedCallback;
+
+        ClientDisconnectedCallback clientDisconnectedCallback;
+
+        void SetClientConnectedCallback(
+            ClientConnectedCallback callback
+        );
+
+        void SetClientDisconnectedCallback(
+            ClientDisconnectedCallback callback
+        );
 };

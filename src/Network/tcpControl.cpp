@@ -361,16 +361,24 @@ void TcpControlServer::HandleClient(
         boost::asio::ip::tcp::socket
     > socket
 ){
+
     std::uint32_t clientId = 0;
 
     try{
-        const std::vector<std::uint8_t> joinData = ReceiveFrame(
-            *socket
-        );
 
-        if(joinData.empty() || joinData[0] != static_cast<std::uint8_t>(
-            ControlMessageType::Join
-        )){
+        const std::vector<std::uint8_t> joinData =
+            ReceiveFrame(
+                *socket
+            );
+
+        if(
+            joinData.empty() ||
+            joinData[0] !=
+                static_cast<std::uint8_t>(
+                    ControlMessageType::Join
+                )
+        ){
+
             return;
         }
 
@@ -379,23 +387,42 @@ void TcpControlServer::HandleClient(
             joinData.end()
         );
 
-        std::lock_guard<std::mutex> lock(
-            clientsMutex
-        );
+        clientId =
+            nextClientId++;
 
-        clientId = nextClientId++;
+        {
+            std::lock_guard<std::mutex> lock(
+                clientsMutex
+            );
 
-        clients.emplace(
-            clientId,
-            ClientConnection{
+            clients.emplace(
                 clientId,
-                clientName,
-                socket
-            }
-        );
+                ClientConnection{
+                    clientId,
+                    clientName,
+                    socket
+                }
+            );
+        }
 
-        std::cout<<"New Client Connected : "<<clientName<< " | ID : "<<clientId<<"\n";
+        //tell Server that a new identity
+        //has been created
+        if(clientConnectedCallback){
 
+            clientConnectedCallback(
+                clientId,
+                clientName
+            );
+        }
+
+        std::cout
+            <<"New Client Connected : "
+            <<clientName
+            <<" | ID : "
+            <<clientId
+            <<"\n";
+
+        //tell client its assigned ID
         std::vector<std::uint8_t> acceptedMessage;
 
         acceptedMessage.push_back(
@@ -414,6 +441,8 @@ void TcpControlServer::HandleClient(
             acceptedMessage
         );
 
+        //tell all existing clients about
+        //the newly connected client
         std::vector<std::uint8_t> connectedMessage;
 
         connectedMessage.push_back(
@@ -438,26 +467,47 @@ void TcpControlServer::HandleClient(
             clientId
         );
 
-        //tcp connection stays open, reading blocks until client disconnects
+        //keep TCP connection alive
+        //until the client disconnects
         while(true){
-            ReceiveFrame(*socket);
+
+            ReceiveFrame(
+                *socket
+            );
         }
     }
+
     catch(const std::exception&){
+
         if(clientId == 0){
             return;
         }
 
-        std::lock_guard<std::mutex> lock(
-            clientsMutex
-        );
+        {
+            std::lock_guard<std::mutex> lock(
+                clientsMutex
+            );
 
-        clients.erase(
-            clientId
-        );
+            clients.erase(
+                clientId
+            );
+        }
 
-        std::cout<<"Client Disconnected | ID : "<<clientId<<"\n";
+        //tell Server to remove all state
+        //belonging to this client
+        if(clientDisconnectedCallback){
 
+            clientDisconnectedCallback(
+                clientId
+            );
+        }
+
+        std::cout
+            <<"Client Disconnected | ID : "
+            <<clientId
+            <<"\n";
+
+        //tell the remaining clients
         std::vector<std::uint8_t> disconnectedMessage;
 
         disconnectedMessage.push_back(
@@ -495,7 +545,9 @@ void TcpControlServer::Broadcast(
         if(clientId == excludedClientId){
             continue;
         }
+
         try{
+
             SendFrame(
                 *client.socket,
                 payload
@@ -504,7 +556,11 @@ void TcpControlServer::Broadcast(
         catch(const std::exception& e){
 
             DEBUG_LOG(
-                "TCP Broadcast Failed for Client : "<<clientId<<<<" : "<<e.what()<<"\n";
+                "TCP Broadcast Failed for Client : "
+                <<clientId
+                <<" : "
+                <<e.what()
+                <<"\n"
             );
         }
     }
@@ -519,4 +575,20 @@ void TcpControlServer::Start(){
     );
 
     std::cout<<"TCP Control Server Started\n";
+}
+
+void TcpControlServer::SetClientConnectedCallback(
+    ClientConnectedCallback callback
+){
+
+    clientConnectedCallback =
+        std::move(callback);
+}
+
+void TcpControlServer::SetClientDisconnectedCallback(
+    ClientDisconnectedCallback callback
+){
+
+    clientDisconnectedCallback =
+        std::move(callback);
 }
