@@ -7,6 +7,8 @@
 #include <chrono>
 #include <stdexcept>
 #include <csignal>
+#include <algorithm>
+#include <cmath>
 
 Client::Client(
     const std::string& serverAddress,
@@ -126,6 +128,8 @@ void Client::Run(){
                 if(type == ControlMessageType::ServerDisconnected){
                     running = false;
                 }
+
+                NotifyWork();
             }
         );
 
@@ -183,14 +187,22 @@ void Client::Run(){
             this
         );
 
-        std::array<float,960> frame{};
+        std::array<float,FrameSamples> frame{};
         std::array<std::uint8_t,4000> encodedData{};
 
         std::uint32_t sequenceNumber = 0;
 
-        auto nextUdpKeepalive = std::chrono::steady_clock::now();
+        auto nextUdpKeepalive = Clock::now();
+        auto nextPlayback = nextUdpKeepalive + FrameDuration;
 
         while(running){
+            {
+                std::lock_guard<std::mutex> lock(
+                    workMutex
+                );
+                workPending = false;
+            }
+
             io_context.poll();
             ProcessControlEvents();
 
@@ -198,7 +210,7 @@ void Client::Run(){
                 break;
             }
 
-            const auto now = std::chrono::steady_clock::now();
+            const auto now = Clock::now();
 
             if(now >= nextUdpKeepalive){
                 Packet keepalive(
@@ -214,6 +226,26 @@ void Client::Run(){
                 );
 
                 nextUdpKeepalive = now + std::chrono::seconds(2);
+            }
+
+            ProcessReceivedVoice();
+
+            if(!running){
+                break;
+            }
+
+            const auto playbackNow = Clock::now();
+
+            if(playbackNow >= nextPlayback){
+                const auto skippedFrames =
+                    (playbackNow - nextPlayback) / FrameDuration;
+
+                nextPlayback += FrameDuration * (skippedFrames + 1);
+
+                ProcessPlayback(
+                    playbackNow,
+                    static_cast<std::uint64_t>(skippedFrames)
+                );
             }
 
             std::vector<float> capturedSamples;
@@ -264,7 +296,27 @@ void Client::Run(){
                 );
             }
 
-            ProcessReceivedVoice();
+            // Drain queued work without sleeping behind captured audio.
+            if(
+                captureQueue.Size() > 0 ||
+                pcmBuffer.Size() >= FrameSamples ||
+                networkQueue.Size() > 0 ||
+                controlQueue.Size() > 0
+            ){
+                continue;
+            }
+
+            std::unique_lock<std::mutex> lock(
+                workMutex
+            );
+
+            workCondition.wait_until(
+                lock,
+                std::min(nextPlayback, nextUdpKeepalive),
+                [this]{
+                    return workPending || !running;
+                }
+            );
         }
 
         // including a final server-disconnect notification
@@ -291,6 +343,8 @@ void Client::HandleCapture(
     captureQueue.Push(
         std::move(capturedSamples)
     );
+
+    NotifyWork();
 }
 
 void Client::ReceiveVoice(){
@@ -306,6 +360,7 @@ void Client::ReceiveVoice(){
             }
 
             networkQueue.Push(std::move(data));
+            NotifyWork();
         }
         catch(const boost::system::system_error& error){
             if(!running){
@@ -349,6 +404,8 @@ void Client::ReceiveVoice(){
             running = false;
         }
     }
+
+    NotifyWork();
 }
 
 //old receive processing is now moved into client processing thread
@@ -356,9 +413,13 @@ void Client::ProcessReceivedVoice(){
 
     std::vector<std::uint8_t> data;
 
-    while(networkQueue.Pop(
-        data
-    )){
+    // Process a bounded batch so incoming traffic cannot starve playback.
+    const std::size_t packetCount = networkQueue.Size();
+
+    for(std::size_t i = 0; i < packetCount; i++){
+        if(!networkQueue.Pop(data)){
+            break;
+        }
 
         ProcessControlEvents();
 
@@ -396,6 +457,17 @@ void Client::ProcessReceivedVoice(){
             packet.GetPayload();
 
         if(payload.empty()){
+            continue;
+        }
+
+        // This protocol uses exactly one 20 ms frame per voice packet.
+        if(
+            opus_packet_get_nb_samples(
+                payload.data(),
+                static_cast<opus_int32>(payload.size()),
+                48000
+            ) != static_cast<int>(FrameSamples)
+        ){
             continue;
         }
 
@@ -438,29 +510,36 @@ void Client::ProcessReceivedVoice(){
             );
         }
 
-        //first packet establishes this client's
-        //sequence starting point
-        if(!remoteClient.receivedFirstPacket){
-
-            remoteClient.expectedSequenceNumber =
-                sequenceNumber;
-
-            remoteClient.receivedFirstPacket = true;
-        }
+        const auto now = Clock::now();
+        bool rebuffer = !remoteClient.receivedFirstPacket;
 
         const std::uint32_t sequenceDistance =
             sequenceNumber - remoteClient.expectedSequenceNumber;
 
-        if(sequenceDistance >= 0x80000000u){
-            DEBUG_LOG(
-                "Late / Duplicate Packet : Client "
-                <<senderClientId
-                <<" : sequence "
-                <<sequenceNumber
-                <<"\n"
-            );
+        if(remoteClient.receivedFirstPacket){
+            if(sequenceDistance >= 0x80000000u){
+                DEBUG_LOG(
+                    "Late / Duplicate Packet : Client "
+                    <<senderClientId
+                    <<" : sequence "
+                    <<sequenceNumber
+                    <<"\n"
+                );
 
-            continue;
+                continue;
+            }
+
+            rebuffer =
+                sequenceDistance >= JitterCapacity ||
+                remoteClient.playbackStart == Clock::time_point::max();
+        }
+
+        //first packet establishes this client's
+        //sequence starting point
+        if(rebuffer){
+            remoteClient.jitterBuffer.Clear();
+            remoteClient.expectedSequenceNumber = sequenceNumber;
+            remoteClient.receivedFirstPacket = true;
         }
 
         //store packet inside this client's
@@ -476,143 +555,11 @@ void Client::ProcessReceivedVoice(){
             continue;
         }
 
-        //wait until three packets are buffered
-        if(
-            !remoteClient.jitterBufferStarted &&
-            remoteClient.jitterBuffer.Size() >= 3
-        ){
-
-            remoteClient.jitterBufferStarted = true;
-
-            DEBUG_LOG(
-                "Jitter Buffer Started for Client "
-                <<senderClientId
-                <<"\n"
+        if(rebuffer){
+            RebufferRemoteClient(
+                remoteClient,
+                now
             );
-        }
-
-        if(!remoteClient.jitterBufferStarted){
-            continue;
-        }
-
-        std::array<float,960> decodedFrame{};
-
-        while(running){
-
-            io_context.poll();
-
-            if(!running){
-                return;
-            }
-
-            std::vector<std::uint8_t> nextPayload;
-
-            //try to get exactly the packet
-            //we are expecting
-            if(remoteClient.jitterBuffer.Pop(
-                remoteClient.expectedSequenceNumber,
-                nextPayload
-            )){
-
-                const int decodedSamples =
-                    remoteClient.decoder.Decode(
-                        nextPayload.data(),
-                        static_cast<int>(
-                            nextPayload.size()
-                        ),
-                        decodedFrame.data(),
-                        static_cast<int>(
-                            decodedFrame.size()
-                        )
-                    );
-
-                if(decodedSamples < 0){
-
-                    std::cerr
-                        <<"Opus Decoding Failed : "
-                        <<opus_strerror(
-                            decodedSamples
-                        )
-                        <<"\n";
-
-                    remoteClient.expectedSequenceNumber++;
-
-                    continue;
-                }
-
-                audioPlayback.Push(
-                    decodedFrame.data(),
-                    static_cast<std::size_t>(
-                        decodedSamples
-                    )
-                );
-
-                remoteClient.frameNumber++;
-                
-                //this cout was very long..... bruhhh
-                DEBUG_LOG(
-                    "Received Voice Packet : Client "
-                    <<senderClientId
-                    <<" : frame "
-                    <<remoteClient.frameNumber
-                    <<" : sequence "
-                    <<remoteClient.expectedSequenceNumber
-                    <<" : "
-                    <<nextPayload.size()
-                    <<"bytes, decoded "
-                    <<decodedSamples
-                    <<" samples\n"
-                );
-
-                remoteClient.expectedSequenceNumber++;
-
-                continue;
-            }
-
-            //expected packet is missing
-            if(remoteClient.jitterBuffer.Size() >= 3){
-
-                DEBUG_LOG(
-                    "Packet Loss Detected : Client "<<senderClientId<<" : sequence "<<remoteClient.expectedSequenceNumber<<"\n"
-                );
-
-                //tell Opus that the packet was lost
-                const int decodedSamples =
-                    remoteClient.decoder.Decode(
-                        nullptr,
-                        0,
-                        decodedFrame.data(),
-                        static_cast<int>(
-                            decodedFrame.size()
-                        )
-                    );
-
-                if(decodedSamples < 0){
-                    std::cerr
-                        <<"Opus PLC Failed : "<<opus_strerror(
-                            decodedSamples
-                        )<<"\n";
-                    remoteClient.expectedSequenceNumber++;
-                    continue;
-                }
-
-                audioPlayback.Push(
-                    decodedFrame.data(),
-                    static_cast<std::size_t>(
-                        decodedSamples
-                    )
-                );
-
-                DEBUG_LOG(
-                    "Generated PLC Audio : Client "<<senderClientId<<" : sequence "<<remoteClient.expectedSequenceNumber<<"\n"
-                );
-
-                remoteClient.expectedSequenceNumber++;
-
-                continue;
-            }
-
-            break;
         }
     }
 }
@@ -693,4 +640,213 @@ void Client::Stop(){
 
     activeClients.clear();
     remoteClients.clear();
+}
+
+void Client::RebufferRemoteClient(
+    RemoteClientState& remoteClient,
+    Clock::time_point now
+){
+    if(!remoteClient.decoder.Reset()){
+        throw std::runtime_error(
+            "Failed to reset Opus decoder"
+        );
+    }
+
+    remoteClient.jitterBufferStarted = false;
+    remoteClient.consecutiveLosses = 0;
+    remoteClient.jitterBuffer.DiscardBefore(
+        remoteClient.expectedSequenceNumber
+    );
+
+    std::uint32_t nextSequenceNumber = 0;
+
+    if(remoteClient.jitterBuffer.GetNextSequence(
+        remoteClient.expectedSequenceNumber,
+        nextSequenceNumber
+    )){
+        remoteClient.expectedSequenceNumber = nextSequenceNumber;
+        remoteClient.playbackStart = now + JitterDelay;
+    }
+    else{
+        // Wait for fresh data after prolonged loss.
+        remoteClient.playbackStart = Clock::time_point::max();
+    }
+}
+
+void Client::ProcessPlayback(
+    Clock::time_point now,
+    std::uint64_t skippedFrames
+){
+    std::array<float,FrameSamples> mixedFrame{};
+    bool hasAudio = false;
+
+    for(auto& [senderClientId, remoteClient] : remoteClients){
+        if(
+            !remoteClient.receivedFirstPacket ||
+            now < remoteClient.playbackStart
+        ){
+            continue;
+        }
+
+        // During startup, count only slots expired for this stream.
+        const std::uint64_t expiredFrames =
+            remoteClient.jitterBufferStarted
+                ? skippedFrames
+                : static_cast<std::uint64_t>(
+                    (now - remoteClient.playbackStart) / FrameDuration
+                );
+
+        if(expiredFrames > 0){
+            if(expiredFrames >= MaxConsecutiveLosses){
+                // The sender may have paused too. Keep the sequence floor
+                // and restart from fresh data instead of guessing its clock.
+                remoteClient.jitterBuffer.Clear();
+                RebufferRemoteClient(remoteClient, now);
+                continue;
+            }
+
+            // Skip expired slots without producing a catch-up burst.
+            remoteClient.expectedSequenceNumber +=
+                static_cast<std::uint32_t>(expiredFrames);
+
+            remoteClient.jitterBuffer.DiscardBefore(
+                remoteClient.expectedSequenceNumber
+            );
+
+            if(!remoteClient.decoder.Reset()){
+                throw std::runtime_error(
+                    "Failed to reset Opus decoder"
+                );
+            }
+
+            remoteClient.consecutiveLosses = 0;
+        }
+
+        if(!remoteClient.jitterBufferStarted){
+            remoteClient.jitterBufferStarted = true;
+
+            DEBUG_LOG(
+                "Jitter Buffer Started for Client "
+                <<senderClientId
+                <<"\n"
+            );
+        }
+
+        std::array<float,FrameSamples> decodedFrame{};
+        std::vector<std::uint8_t> nextPayload;
+        int decodedSamples = 0;
+
+        //try to get exactly the packet
+        //we are expecting
+        if(remoteClient.jitterBuffer.Pop(
+            remoteClient.expectedSequenceNumber,
+            nextPayload
+        )){
+            decodedSamples = remoteClient.decoder.Decode(
+                nextPayload.data(),
+                static_cast<int>(nextPayload.size()),
+                decodedFrame.data(),
+                static_cast<int>(decodedFrame.size())
+            );
+
+            if(decodedSamples != static_cast<int>(FrameSamples)){
+                std::cerr
+                    <<"Opus Decoding Failed : "
+                    <<decodedSamples
+                    <<"\n";
+            }
+            else{
+                remoteClient.consecutiveLosses = 0;
+                remoteClient.frameNumber++;
+
+                DEBUG_LOG(
+                    "Received Voice Packet : Client "
+                    <<senderClientId
+                    <<" : frame "
+                    <<remoteClient.frameNumber
+                    <<" : sequence "
+                    <<remoteClient.expectedSequenceNumber
+                    <<" : "
+                    <<nextPayload.size()
+                    <<"bytes, decoded "
+                    <<decodedSamples
+                    <<" samples\n"
+                );
+            }
+        }
+
+        // The deadline has arrived: missing or invalid data uses PLC.
+        if(decodedSamples != static_cast<int>(FrameSamples)){
+            decodedFrame.fill(0.0f);
+
+            //tell Opus that the packet was lost
+            decodedSamples = remoteClient.decoder.Decode(
+                nullptr,
+                0,
+                decodedFrame.data(),
+                static_cast<int>(decodedFrame.size())
+            );
+
+            remoteClient.consecutiveLosses++;
+
+            if(decodedSamples < 0){
+                std::cerr
+                    <<"Opus PLC Failed : "<<opus_strerror(
+                        decodedSamples
+                    )<<"\n";
+            }
+
+            DEBUG_LOG(
+                "Generated PLC Audio : Client "<<senderClientId<<" : sequence "<<remoteClient.expectedSequenceNumber<<"\n"
+            );
+        }
+
+        if(decodedSamples == static_cast<int>(FrameSamples)){
+            for(std::size_t i = 0; i < mixedFrame.size(); i++){
+                mixedFrame[i] += decodedFrame[i];
+            }
+
+            hasAudio = true;
+        }
+
+        remoteClient.expectedSequenceNumber++;
+
+        if(remoteClient.consecutiveLosses >= MaxConsecutiveLosses){
+            RebufferRemoteClient(remoteClient, now);
+        }
+    }
+
+    if(!hasAudio){
+        return;
+    }
+
+    // Preserve relative speaker levels while keeping the sum in range.
+    float peak = 1.0f;
+
+    for(const float sample : mixedFrame){
+        peak = std::max(peak, std::abs(sample));
+    }
+
+    if(peak > 1.0f){
+        for(float& sample : mixedFrame){
+            sample /= peak;
+        }
+    }
+
+    // One mixed frame per deadline, regardless of the speaker count.
+    audioPlayback.Push(
+        mixedFrame.data(),
+        mixedFrame.size()
+    );
+}
+
+void Client::NotifyWork(){
+    {
+        std::lock_guard<std::mutex> lock(
+            workMutex
+        );
+        workPending = true;
+    }
+
+    workCondition.notify_one();
 }

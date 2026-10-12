@@ -32,7 +32,7 @@ bool OpusEncoderWrapper::Initialize(
     );
 
     if(encoder == nullptr || error != OPUS_OK){
-        encoder == nullptr;
+        encoder = nullptr;
         return false;
     }
 

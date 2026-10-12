@@ -2,7 +2,7 @@
 #include <algorithm>
 
 AudioPlayback::AudioPlayback():
-pcmBuffer(9600){ //the application wont retain 1 second of audio now
+pcmBuffer(1920){ //retain at most two 20 ms playback frames
 
 }
 

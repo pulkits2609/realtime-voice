@@ -57,3 +57,14 @@ int OpusDecoderWrapper::Decode(
         0 //this 0 means : decode_fec = false , typically required for packet loss recovery and handling, we arent implementing it yet
     );
 }
+
+bool OpusDecoderWrapper::Reset(){
+    if(decoder == nullptr){
+        return false;
+    }
+
+    return opus_decoder_ctl(
+        decoder,
+        OPUS_RESET_STATE
+    ) == OPUS_OK;
+}

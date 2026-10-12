@@ -25,9 +25,20 @@
 #include "Network/tcpControl.hpp"
 
 #include <atomic>
+#include <chrono>
+#include <mutex>
+#include <condition_variable>
 
 class Client{
     private:
+        using Clock = std::chrono::steady_clock;
+
+        static constexpr std::size_t FrameSamples = 960;
+        static constexpr auto FrameDuration = std::chrono::milliseconds(20);
+        static constexpr auto JitterDelay = std::chrono::milliseconds(60);
+        static constexpr std::uint32_t JitterCapacity = 8;
+        static constexpr unsigned int MaxConsecutiveLosses = 5;
+
         boost::asio::io_context io_context;
 
         UdpSocket socket;
@@ -57,6 +68,10 @@ class Client{
         std::atomic<bool> running{false};
         std::thread receiveThread;
 
+        std::mutex workMutex;
+        std::condition_variable workCondition;
+        bool workPending = false;
+
         // TCP membership is authoritative.
         std::map<std::uint32_t, std::string> activeClients;
 
@@ -70,9 +85,11 @@ class Client{
             bool receivedFirstPacket = false;
             bool jitterBufferStarted = false;
             int frameNumber = 0;
+            unsigned int consecutiveLosses = 0;
+            Clock::time_point playbackStart = Clock::time_point::max();
 
             RemoteClientState():
-                jitterBuffer(3),
+                jitterBuffer(JitterCapacity),
                 decoder(){
 
             }
@@ -101,6 +118,18 @@ class Client{
         );
 
         void ProcessReceivedVoice();
+
+        void RebufferRemoteClient(
+            RemoteClientState& remoteClient,
+            Clock::time_point now
+        );
+
+        void ProcessPlayback(
+            Clock::time_point now,
+            std::uint64_t skippedFrames
+        );
+
+        void NotifyWork();
 
         void ProcessControlEvents();
 

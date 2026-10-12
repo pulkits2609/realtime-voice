@@ -29,4 +29,15 @@ class JitterBuffer{
         );
 
         std::size_t Size() const;
+
+        void Clear();
+
+        void DiscardBefore(
+            std::uint32_t sequenceNumber
+        );
+
+        bool GetNextSequence(
+            std::uint32_t expectedSequenceNumber,
+            std::uint32_t& sequenceNumber
+        ) const;
 };

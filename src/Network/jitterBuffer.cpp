@@ -52,3 +52,42 @@ std::size_t JitterBuffer::Size() const{
 
 //then we ask from jitterBuffer.Pop(expectedSequenceNumber, payload)
 //which gives received 3 4 5, when originally 5 3 4 got delivered
+
+void JitterBuffer::Clear(){
+    packets.clear();
+}
+
+void JitterBuffer::DiscardBefore(
+    std::uint32_t sequenceNumber
+){
+    for(auto packet = packets.begin(); packet != packets.end();){
+        if(packet->first - sequenceNumber >= 0x80000000u){
+            packet = packets.erase(packet);
+        }
+        else{
+            ++packet;
+        }
+    }
+}
+
+bool JitterBuffer::GetNextSequence(
+    std::uint32_t expectedSequenceNumber,
+    std::uint32_t& sequenceNumber
+) const{
+    bool found = false;
+    std::uint32_t nearestDistance = 0x80000000u;
+
+    // Map order alone is incorrect when sequence numbers wrap.
+    for(const auto& packet : packets){
+        const std::uint32_t distance =
+            packet.first - expectedSequenceNumber;
+
+        if(distance < nearestDistance){
+            nearestDistance = distance;
+            sequenceNumber = packet.first;
+            found = true;
+        }
+    }
+
+    return found;
+}

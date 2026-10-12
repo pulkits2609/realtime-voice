@@ -26,6 +26,8 @@ class OpusDecoderWrapper{
             int channels
         );
 
+        bool Reset();
+
         int Decode(
             const std::uint8_t* packet,
             int packetBytes,

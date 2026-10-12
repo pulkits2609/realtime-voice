@@ -1,4 +1,5 @@
 #include <iostream>
+#include <stdexcept>
 #include "Network/server.hpp"
 
 using boost::asio::ip::udp;
@@ -17,11 +18,16 @@ int main(
     
     try{
 
-        const unsigned short port = static_cast<unsigned short>(
-            std::stoi(
-                argv[1]
-            )
-        );
+        std::size_t parsedCharacters = 0;
+        const int portValue = std::stoi(argv[1], &parsedCharacters);
+
+        if(parsedCharacters != std::string(argv[1]).size() || portValue < 1 || portValue > 65535){
+            throw std::invalid_argument(
+                "Port must be a number between 1 and 65535"
+            );
+        }
+
+        const unsigned short port = static_cast<unsigned short>(portValue);
         Server server(
             port
         );
