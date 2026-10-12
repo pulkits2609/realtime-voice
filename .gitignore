@@ -1,5 +1,6 @@
 # Build
 build/
+dist/
 cmake-build-*/
 
 # VS Code

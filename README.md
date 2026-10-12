@@ -26,7 +26,7 @@ There is no graphical interface. You start the server and clients from a termina
 
 The Windows build and local voice pipeline have been tested, including multiple speakers, disconnects, packet loss recovery, domain resolution, and server restarts.
 
-Build and setup scripts are also provided for Ubuntu 22.04 and newer. The latest version still needs a full Ubuntu build and audio test, along with testing between devices over the public internet.
+The Ubuntu release is built on Ubuntu 22.04. The packaged client and server have been checked in a clean Ubuntu 22.04 environment without separately installing Opus or audio libraries, and on Ubuntu 24.04. Audio-device startup was checked through WSLg. Native Ubuntu desktop audio and public-internet testing are still needed.
 
 This version is suitable for learning and controlled testing. Before running an unrestricted public server, the project still needs authentication, encrypted transport, and resource limits. See [Known limitations](#known-limitations).
 
@@ -119,6 +119,17 @@ The setup script supports Ubuntu 22.04 and newer and checks for:
 miniaudio is included in the repository, so it does not need a separate download.
 
 The client needs a working microphone and playback device. It uses the system's default audio devices.
+
+## Downloading a release
+
+Prebuilt packages are available on the [Releases page](https://github.com/pulkits2609/realtime-voice/releases) once published. They do not require the project setup scripts or a compiler.
+
+- **Windows x64:** extract the entire ZIP, then run `voice_server.exe` and `voice_client.exe` from the extracted folder. Keep the bundled DLLs beside them.
+- **Ubuntu 22.04+ x86_64:** extract the application tar archive, then run its top-level `./voice_server` and `./voice_client` launchers. They load the included libraries automatically.
+
+Both downloads contain `RUN.txt` with commands. Ubuntu still needs its normal audio service and working devices. The separate Ubuntu library-source archive is provided for redistribution; it is not required to run the applications.
+
+To create these packages yourself, see [Packaging a release](packaging/README.md).
 
 ## Getting started
 
@@ -529,6 +540,6 @@ The networking protocol, session handling, buffering, and client-side mixing are
 
 ## License
 
-A license for the project's own code has not been added yet. The third-party dependencies retain their respective licenses.
+The project's own code is licensed under the [MIT License](LICENSE).
 
-A project license needs to be chosen before this repository is presented as licensed open-source software.
+Third-party dependencies retain their respective licenses. Binary releases include their license notices; the Ubuntu release also provides the matching sources for bundled libraries.
