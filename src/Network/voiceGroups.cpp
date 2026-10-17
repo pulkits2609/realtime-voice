@@ -58,7 +58,10 @@ Json VoiceGroups::Open(std::uint32_t id, const Json& hello){
             throw ProtocolError("server_restarted", "The supplied server instance no longer exists");
         }
         auto& group = FindGroup(Number(hello, "group_id"));
-        Number(hello, "channel_id");
+        const auto channel = Number(hello, "channel_id");
+        if(channel != group.all && std::find(group.teams.begin(), group.teams.end(), channel) == group.teams.end()){
+            throw ProtocolError("invalid_channel", "The channel is not part of the requested group");
+        }
         if(group.owner != 0){
             Text(hello, "member_id");
             if(!hello.contains("server_instance")){
@@ -283,6 +286,10 @@ Json VoiceGroups::Execute(std::uint32_t caller, const Json& request, bool local)
     }
     if(op == "delete_channel"){
         throw ProtocolError("delete_group_required", "Delete the parent group, not an individual child channel");
+    }
+    if(op != "group_details" && op != "delete_group" && op != "set_phase" &&
+       op != "bind_player" && op != "set_team" && op != "remove_player"){
+        throw ProtocolError("unknown_operation", "Unknown management operation");
     }
     auto& group = FindGroup(Number(request, "group_id"));
     RequireOwner(group, caller, local);

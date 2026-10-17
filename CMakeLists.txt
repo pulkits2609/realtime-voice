@@ -243,3 +243,12 @@ if(WIN32)
     target_link_libraries(client_audio_test PRIVATE ws2_32)
 endif()
 add_test(NAME client_audio COMMAND client_audio_test)
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME server_integration COMMAND ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/server_integration.py $<TARGET_FILE_DIR:voice_server>)
+    add_test(NAME background_integration COMMAND ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/background_integration.py $<TARGET_FILE_DIR:voice_client>)
+    set_tests_properties(server_integration background_integration PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE)
+endif()

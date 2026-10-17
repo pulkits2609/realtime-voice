@@ -319,7 +319,11 @@ Json TcpControlClient::Connect(const std::string& serverAddress, unsigned short 
         const auto text = hello.dump();
         WriteControlFrame(socket, {text.begin(), text.end()}, alive);
         const auto frame = ReadControlFrame(socket, alive);
-        const auto response = Json::parse(frame);
+        Json response;
+        try{ response = Json::parse(frame); }
+        catch(const Json::exception&){
+            throw ProtocolError("incompatible_version", "The server must use JSON protocol version 2");
+        }
         if(response.value("v", 0) != VoiceProtocolVersion){
             throw ProtocolError("incompatible_version", "The server does not use protocol version 2");
         }
@@ -541,10 +545,14 @@ void TcpControlServer::HandleClient(std::shared_ptr<boost::asio::ip::tcp::socket
                     else{
                         std::this_thread::sleep_for(pollInterval);
                     }
-                    if(!client->closing && Clock::now() >= nextPing && client->pendingPing == 0){
-                        if(++nonce == 0) ++nonce;
-                        client->pendingPing = nonce;
-                        const auto ping = Event("ping", {{"nonce", nonce}}).dump();
+                    if(!client->closing && Clock::now() >= nextPing){
+                        auto challenge = client->pendingPing.load();
+                        if(challenge == 0){
+                            if(++nonce == 0) ++nonce;
+                            challenge = nonce;
+                            client->pendingPing = challenge;
+                        }
+                        const auto ping = Event("ping", {{"nonce", challenge}}).dump();
                         WriteControlFrame(*client->socket, {ping.begin(), ping.end()}, alive);
                         nextPing = Clock::now() + heartbeatInterval;
                     }
@@ -570,7 +578,7 @@ void TcpControlServer::HandleClient(std::shared_ptr<boost::asio::ip::tcp::socket
                 if(request.is_object() && request.value("op", "") == "pong"){
                     if(request.value("v", 0) != VoiceProtocolVersion ||
                        Number(request, "nonce") != client->pendingPing.load()){
-                        throw ProtocolError("invalid_heartbeat", "The pong nonce does not match the outstanding ping");
+                        continue; // Stale/duplicate pongs never extend the heartbeat deadline.
                     }
                     client->pendingPing = 0;
                     lastPong = Clock::now();

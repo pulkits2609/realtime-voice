@@ -49,6 +49,15 @@ struct ClientAudioTest{
         for(unsigned i = 0; i < mixed.size(); i++){
             Check(std::abs(mixed[i] - reference[i] * 2 / peak) < .00001f, "Mixed samples changed unexpectedly");
         }
+        for(unsigned tick = 1; tick <= 5; tick++){
+            client.ProcessPlayback(now + std::chrono::milliseconds(tick * 20), 0);
+        }
+        Check(client.mixedFrames == 6, "Missing frames were not concealed at playback deadlines");
+        for(const auto& [id, remote] : client.remoteClients){
+            Check(remote.playbackStart == Client::Clock::time_point::max(), "Loss recovery was not bounded");
+        }
+        client.ProcessPlayback(now + std::chrono::seconds(2), 0);
+        Check(client.mixedFrames == 6, "Idle streams generated endless PLC");
         client.ClearAudio();
         client.receiveRevision = 6;
         client.networkQueue.Push(packet.Serialize());

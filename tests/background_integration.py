@@ -125,6 +125,37 @@ class BackgroundTests(unittest.TestCase):
             if not child.stdin.closed: child.stdin.close()
             child.stdout.close(); child.stderr.close()
 
+    def test_server_restart_rejects_old_instance(self):
+        old_group = self.game()
+        listener = socket.socket(); listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]; listener.close()
+        replacement = subprocess.Popen([str(server.BUILD / ("voice_server" + server.EXE)), str(port)],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
+        manager = None
+        try:
+            deadline = time.monotonic() + 5
+            while manager is None:
+                try: manager = VoiceAPI("127.0.0.1", port)
+                except OSError:
+                    if time.monotonic() > deadline: raise
+                    time.sleep(.02)
+            new_instance = manager.ok("hello", role="manager")["server_instance"]
+            replacement_group = manager.ok("create_group", type="game", teams=2)
+            self.assertNotEqual(new_instance, self.info["server_instance"])
+            child = self.child()
+            child.ok("connect", host="127.0.0.1", port=port, name="old", member_id="old",
+                server_instance=self.info["server_instance"], group_id=replacement_group["group_id"],
+                channel_id=replacement_group["all_channel_id"], audio=False)
+            self.assertEqual(child.event("error")["code"], "server_restarted")
+            child.event("disconnected")
+            self.assertEqual(manager.ok("group_details", group_id=replacement_group["group_id"])["connected_players"], 0)
+        finally:
+            if manager: manager.close()
+            replacement.stdin.write("shutdown\n"); replacement.stdin.flush()
+            try: replacement.wait(timeout=8)
+            except subprocess.TimeoutExpired: replacement.kill(); replacement.wait()
+            replacement.stdin.close()
+
 
 if __name__ == "__main__":
     unittest.main()

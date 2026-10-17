@@ -192,6 +192,14 @@ class ServerTests(unittest.TestCase):
         result = peer.request("hello", role="manager", v=1)
         self.assertEqual(result["error"]["code"], "incompatible_version")
 
+    def test_short_heartbeat_interruption_keeps_groups(self):
+        group = self.game()
+        self.manager.heartbeat = False
+        time.sleep(3)
+        self.manager.heartbeat = True
+        time.sleep(2.5)
+        self.assertEqual(self.manager.ok("group_details", group_id=group["group_id"])["group_id"], group["group_id"])
+
     def test_standalone_client_manual_game_and_eof(self):
         self.server.stdin.write("create game 2 standalone\n")
         self.server.stdin.flush()

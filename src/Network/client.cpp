@@ -163,6 +163,11 @@ void Client::Post(const Json& request){
 
 void Client::Publish(){
     Json status = session;
+    if(!status.contains("group_id")) status["group_id"] = 0;
+    if(!status.contains("transmit_channel_id")) status["transmit_channel_id"] = nullptr;
+    if(!status.contains("receive_channels")) status["receive_channels"] = Json::array();
+    status["requested_group_id"] = joinInfo.value("group_id", 0u);
+    status["member_id"] = joinInfo.value("member_id", clientName);
     status["mutes"] = mutes->Snapshot();
     status["audio_enabled"] = audioEnabled;
     status["audio_initialized"] = audioStarted;
@@ -198,6 +203,9 @@ void Client::ProcessCommands(){
             continue;
         }
         try{
+            if(pendingRequests.size() >= 128){
+                throw ProtocolError("too_many_requests", "At most 128 control requests may be outstanding");
+            }
             controlClient.Post(request);
             pendingRequests.insert(Text(request, "id"));
         }
