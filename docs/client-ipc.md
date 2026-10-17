@@ -6,7 +6,9 @@ Launch the built client as a child process:
 voice_client --ipc
 ~~~
 
-On Windows use build/voice_client.exe; on Ubuntu use build/voice_client.
+From a source checkout use build/voice_client.exe on Windows or build/voice_client
+on Ubuntu. From an extracted package use .\voice_client.exe --ipc on Windows or
+./voice_client --ipc on Ubuntu, using the top-level launcher.
 Connect its stdin, stdout, and stderr to separate pipes. Do not merge stderr into
 stdout. No interactive prompts are used. The child owns its TCP/UDP connections,
 audio devices, Opus encoder/decoders, jitter buffers, and mixing.
@@ -193,4 +195,7 @@ from draining diagnostics. tools/mock_gfx.py combines it with tools/voice_api.py
 to exercise the exact remote-manager/child-binding handshake.
 
 These Python tools are examples/tests, not an implementation of gfx_2d.
+All three scripts are included in both release archives under tools. Python 3.10+
+is needed only to run these optional examples; normal client/server execution
+does not require Python. See the package commands in [GFX integration](gfx-integration.md).
 

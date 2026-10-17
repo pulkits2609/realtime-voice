@@ -4,6 +4,10 @@ Release users extract the archive and run the applications. They do not run setu
 
 The maintainer needs Python 3.10 or newer. The packaging script builds Release, runs the existing tests, and excludes test executables and debug symbols. Generated files go into `dist/`, which is ignored by Git.
 
+Build, package.py, and smoke_test.py commands in this guide run from a SOURCE
+CHECKOUT. The extracted-package example commands have their own section below;
+archive users do not need the maintainer scripts or a build directory.
+
 The examples below use `v2.0.0` as a prospective release version. Protocol 2 is
 incompatible with the published v1.0.0 applications; use a new version when
 publishing. Packaging does not create a Git tag, push, or publish a release.
@@ -77,6 +81,42 @@ Output:
 Publish the library sources alongside the Ubuntu binary and preserve license notices. Users do not need that source archive to run the applications.
 
 Users run the top-level `voice_client` and `voice_server` launchers, which locate bundled libraries using an absolute path. Extraction directories with spaces are supported.
+
+## Optional integration examples
+
+Both archives include tools/mock_gfx.py, tools/voice_api.py, and
+tools/background_voice.py with their relative layout intact. Python 3.10+ is
+required only for these scripts, not for normal standalone use.
+
+From the extracted Windows directory, start .\voice_server.exe 8080, then:
+
+```powershell
+python tools/mock_gfx.py --port 8080 --client voice_client.exe --no-audio
+```
+
+From the extracted Ubuntu directory, start ./voice_server 8080, then:
+
+```bash
+python3 tools/mock_gfx.py --port 8080 --client ./voice_client --no-audio
+```
+
+Source checkouts instead use --client build/voice_client.exe or
+--client ./build/voice_client. See [the integration contract](../docs/gfx-integration.md).
+
+After building an archive, verify its checksum and run its packaged mock from an
+external temporary extraction directory containing spaces:
+
+```powershell
+python packaging/smoke_test.py dist/realtime-voice-v2.0.0-windows-x64.zip
+```
+
+```bash
+python3 packaging/smoke_test.py dist/realtime-voice-v2.0.0-ubuntu-x86_64.tar.gz
+```
+
+The smoke test checks imports come from the extracted tools directory, strips
+Python environment overrides, restricts Windows PATH to System32, and uses the
+Ubuntu bundled-library launchers. It runs device-free; hardware checks remain.
 
 ## Before publishing
 

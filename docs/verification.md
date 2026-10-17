@@ -74,6 +74,22 @@ This update was built and the registered suites run on Windows x64 / MSVC and
 Ubuntu 22.04 / GCC 11. The Ubuntu tests ran in an isolated WSL-hosted environment.
 This does not establish native audio-device behavior on every Ubuntu desktop.
 
+The audit follow-up verification completed:
+
+| Check | Result |
+| --- | --- |
+| Windows x64 / VS 2022 Release | All seven CTest suites passed |
+| Windows complete integration repetitions | Five runs of server_integration and five of background_integration, all passed; stop on first failure |
+| Windows focused startup repetitions | Twenty rounds of the five StartupTests methods: 100 methods passed, including intentional failures and cleanup |
+| Ubuntu 22.04 / GCC 11 Release | All seven suites passed |
+| Ubuntu static-C++-runtime packaging build | All seven suites passed |
+| Windows and Ubuntu extracted archives | Both packaged mocks passed, including resume/reconciliation; spaces in external extraction paths, packaged import origins checked |
+
+The local v2.0.0-audit archives and checksums were rebuilt. Windows extraction
+used a System32-only PATH. Linux extraction used the bundled-library launchers.
+No release was published. These results do not establish the cause of the original
+intermittent Windows startup failure or replace hardware/real-network testing.
+
 ## Hardware listening checklist
 
 Use separate computers and headphones. Avoid multiple live microphones feeding
@@ -109,7 +125,22 @@ Run tools/mock_gfx.py against a server without another manager:
 python tools/mock_gfx.py --port 8080 --client build/voice_client.exe --no-audio
 ~~~
 
-Use build/voice_client on Ubuntu. The automated suite runs this mock too.
+This is the source-checkout command. Use python3 and build/voice_client on Ubuntu.
+The automated suite runs this mock too. Extracted archives use their own tools
+directory and top-level client; see [package example commands](gfx-integration.md#run-the-mock-external-application).
+
+Maintainers can check an archive and checksum from the SOURCE CHECKOUT with:
+
+~~~text
+python packaging/smoke_test.py dist/realtime-voice-v2.0.0-audit-windows-x64.zip
+python3 packaging/smoke_test.py dist/realtime-voice-v2.0.0-audit-ubuntu-x86_64.tar.gz
+~~~
+
+This extracts outside the checkout to an OS temporary directory containing spaces,
+checks module import paths, and runs ONLY the packaged examples/binaries. Python
+ignores PYTHONPATH/PYTHONHOME; Windows PATH is restricted to System32. Ubuntu uses
+the package's top-level launchers and bundled libraries. Neither smoke test opens
+audio devices or establishes microphone/headphone quality.
 
 For manual inspection:
 

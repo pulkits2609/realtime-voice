@@ -6,14 +6,18 @@ For the game lifecycle and complete examples, see [GFX integration](gfx-integrat
 
 ## Build and start
 
-Windows: run setup/setup.bat once, then build.bat -release.
-Ubuntu 22.04+: run bash setup/setup.sh once, then bash build.sh -release.
+From a source checkout: Windows runs setup/setup.bat once, then build.bat -release.
+Ubuntu 22.04+ runs bash setup/setup.sh once, then bash build.sh -release.
 
 ~~~text
 voice_server 8080
 ~~~
 
-The Windows executable is build/voice_server.exe; Ubuntu uses build/voice_server.
+Source-build executables are build/voice_server.exe and build/voice_server.
+In an extracted package, use .\voice_server.exe 8080 on Windows or
+./voice_server 8080 on Ubuntu (the top-level bundled-library launcher).
+The optional Python examples are included under tools; see the separate source
+and package commands in [GFX integration](gfx-integration.md).
 One process listens on the chosen IPv4 port for both TCP and UDP. Groups do not
 allocate processes or extra ports. The server starts with no groups.
 
@@ -95,6 +99,7 @@ reader is disconnected rather than silently losing reliable control messages.
 | op, role | String, at most 64 bytes |
 | name, member_id | Nonempty string, at most 64 UTF-8 bytes, no control characters |
 | group_id, channel_id, session_id | Positive uint32 integer |
+| manager_id | Positive uint32 logical owner, scoped to server_instance |
 | team | 1..team count for Game; 0 for Lobby |
 | server_instance | Server-generated 16-character hexadecimal string |
 | mute fields | JSON booleans, never 0/1 or strings |
@@ -233,6 +238,8 @@ gfx_game_groups counts manager-owned Game groups, not manually created groups.
 Full group details include group_id, name, type, phase, owner, all_channel_id,
 team_channel_ids, connected_players, channels, and participants.
 owner is {"type":"manual"} or {"type":"gfx","manager_id":1}.
+The old owner.session_id field is replaced by owner.manager_id; ownership no
+longer changes when a manager's TCP session changes.
 
 Each channel has channel_id, name, receive_members, and selected_transmitters.
 receive_members counts eligible subscriptions, even if locally muted; while

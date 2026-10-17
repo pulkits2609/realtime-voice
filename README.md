@@ -323,6 +323,11 @@ Transmitting to All still permits receiving your own Team. Team transmission is 
 
 Other applications launch `voice_client --ipc` and follow [the background API](docs/client-ipc.md). Audio goes directly to voice_server, never through IPC or a gameplay server.
 
+Both packages include the optional Python integration example and its helpers in
+tools/. Python is needed only for those scripts. Use the separate
+[source-checkout and extracted-package commands](docs/gfx-integration.md#run-the-mock-external-application)
+so a packaged client is launched from its top-level runtime path.
+
 Press **Ctrl+C** to stop either program. The server releases its sockets during shutdown so the same port can be used again.
 
 For a useful voice test, run the clients on separate computers and wear headphones. Multiple microphone/playback clients on one machine can create feedback.

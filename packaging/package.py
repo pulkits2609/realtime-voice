@@ -42,6 +42,9 @@ def common_files(stage, version, target):
     (stage / "packaging").mkdir()
     shutil.copy2(PROJECT / "packaging/README.md", stage / "packaging/README.md")
     shutil.copytree(PROJECT / "docs", stage / "docs")
+    (stage / "tools").mkdir()
+    for name in ("mock_gfx.py", "voice_api.py", "background_voice.py"):
+        shutil.copy2(PROJECT / "tools" / name, stage / "tools" / name)
     notices = stage / "licenses"
     notices.mkdir()
     shutil.copy2(PROJECT / "include/third_party/nlohmann/LICENSE.MIT", notices / "nlohmann-json.txt")
@@ -149,6 +152,8 @@ def windows_package(stage):
           "Use the printed group/channel IDs. For example, if both are 1:\n"
           "  .\\voice_client.exe 127.0.0.1 8080 your_name 1 1\n"
           "In the client terminal: mic on, then all on (muted defaults).\n"
+          "Optional example (Python 3.10+ only for this script):\n"
+          "  python tools/mock_gfx.py --port 8080 --client voice_client.exe --no-audio\n"
           "For another computer, replace 127.0.0.1 with the server's address.\n"
           "Allow the server port through its firewall for both TCP and UDP.\n"
           "Use headphones. Stop with Ctrl+C.\n")
@@ -252,6 +257,8 @@ def linux_package(stage, source_stage):
           "Use the printed group/channel IDs. For example, if both are 1:\n"
           "  ./voice_client 127.0.0.1 8080 your_name 1 1\n"
           "In the client terminal: mic on, then all on (muted defaults).\n"
+          "Optional example (Python 3.10+ only for this script):\n"
+          "  python3 tools/mock_gfx.py --port 8080 --client ./voice_client --no-audio\n"
           "Use these launchers, not the executables inside bin/.\n"
           "No compiler, Python, Boost, or Opus installation is needed to run this package.\n"
           "The host supplies glibc, its audio service/drivers, and actual audio devices.\n"

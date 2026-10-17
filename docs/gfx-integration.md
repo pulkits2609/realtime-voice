@@ -308,23 +308,48 @@ If voice_server stops/restarts, everything it hosted disappears. Existing childr
 emit server_disconnected and disconnected; their IPC processes can remain alive.
 The new server_instance differs, and an old connect configuration returns
 server_restarted instead of attaching to newly reused numeric IDs.
+An old management resume also returns server_restarted. Do not fall back to fresh
+registration and recreate voice groups for those existing games.
 
 GFX marks the affected existing game sessions' voice unavailable. Do not silently
 create replacement groups or reconnect them to some other lobby. Gameplay continues.
 
 ## Run the mock external application
 
-Start voice_server first, with no other manager connected, then:
+Python 3.10+ is needed only for these optional scripts, not to run the C++ client
+or server normally. They use only the Python standard library.
+
+From the SOURCE CHECKOUT, start build/voice_server.exe 8080 on Windows (or
+./build/voice_server 8080 on Ubuntu), with no manager registered. Then:
 
 ~~~text
 python tools/mock_gfx.py --host 127.0.0.1 --port 8080 --client build/voice_client.exe --no-audio
 ~~~
 
-On Ubuntu use build/voice_client without .exe. Remove --no-audio only for a manual
-device test. The mock creates a Game, launches the child, binds its session, changes
-mutes, starts a match, switches transmit, returns to waiting, deletes the group,
+On Ubuntu use python3 and --client ./build/voice_client.
+
+From an EXTRACTED WINDOWS PACKAGE, run .\voice_server.exe 8080 in one terminal.
+In another terminal opened in that same extracted directory:
+
+~~~text
+python tools/mock_gfx.py --port 8080 --client voice_client.exe --no-audio
+~~~
+
+From an EXTRACTED UBUNTU PACKAGE, run ./voice_server 8080, then in another terminal
+in the extracted directory:
+
+~~~text
+python3 tools/mock_gfx.py --port 8080 --client ./voice_client --no-audio
+~~~
+
+Keep tools/mock_gfx.py, tools/voice_api.py, and tools/background_voice.py together;
+their relative imports work directly after extraction. No source checkout or
+build directory is needed for the package commands.
+
+Remove --no-audio only for a manual device test. The mock creates a Game, launches
+the child, binds its session, changes mutes, starts a match, switches transmit,
 resumes management without replacing the group/player session, reconciles owned
-groups, and shuts down the child.
+groups, returns to waiting, deletes the group, and shuts down the child.
 
 The implementation is in tools/mock_gfx.py, tools/voice_api.py, and
 tools/background_voice.py. They demonstrate actual working protocols, not a planned
