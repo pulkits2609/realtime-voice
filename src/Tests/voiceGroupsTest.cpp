@@ -7,8 +7,42 @@ void Check(bool value, const char* message){
     if(!value) throw std::runtime_error(message);
 }
 
+struct ManagerRecoveryTest{
+    static void Run(){
+        unsigned deleted = 0;
+        VoiceGroups groups([&](auto, const Json& event){ if(event["event"] == "group_deleted") deleted++; }, [](auto){});
+        Json hello = {{"v",2},{"id","hello"},{"op","hello"},{"role","manager"}};
+        const auto original = groups.Open(1, hello);
+        auto game = groups.Request(1, {{"v",2},{"id","create"},{"op","create_group"},{"type","game"},{"teams",2}});
+        groups.Remove(1);
+        const auto oldDeadline = groups.recoveryDeadline;
+        hello.update({{"manager_id",original["manager_id"]},{"server_instance",groups.Instance()}});
+        auto invalid = hello; invalid["manager_id"] = 999;
+        try{ groups.Open(2, invalid); Check(false, "Unknown ownership resumed"); }
+        catch(const ProtocolError& error){ Check(error.code == "manager_expired", "Unknown owner error"); }
+        Check(groups.recoveryDeadline == oldDeadline, "Failed resume extended grace");
+        Check(groups.Open(3, hello)["resumed"] == true, "Resume flag missing");
+        groups.Remove(1, true); // An old socket's late timeout cannot affect the new session.
+        groups.ExpireManager(oldDeadline + std::chrono::seconds(1));
+        Check(groups.groups.count(game["group_id"]) && deleted == 0, "Stale callback/deadline destroyed resumed group");
+        groups.Remove(3);
+        groups.ExpireManager(groups.recoveryDeadline);
+        groups.ExpireManager(VoiceGroups::Clock::time_point::max());
+        Check(groups.groups.empty() && groups.managerId == 0, "Grace did not release ownership");
+        try{ groups.Open(4, hello); Check(false, "Expired ownership resumed"); }
+        catch(const ProtocolError& error){ Check(error.code == "manager_expired", "Expired owner error"); }
+        VoiceGroups restarted([](auto, const Json&){}, [](auto){});
+        try{ restarted.Open(1, hello); Check(false, "Old server ownership resumed after restart"); }
+        catch(const ProtocolError& error){ Check(error.code == "server_restarted", "Restart resume error"); }
+        hello.erase("manager_id"); hello.erase("server_instance");
+        const auto fresh = groups.Open(5, hello);
+        Check(fresh["manager_id"] != original["manager_id"], "Logical owner ID reused");
+    }
+};
+
 int main(){
     try{
+        ManagerRecoveryTest::Run();
         std::map<std::uint32_t, Json> state;
         std::set<std::uint32_t> closed;
         VoiceGroups groups([&](auto id, const Json& event){
@@ -136,7 +170,12 @@ int main(){
         groups.Request(10, bind);
         Check(state[12]["mutes"] == Json({{"microphone",true},{"all",true},{"team",true}}), "Fresh mute defaults");
         groups.Remove(10);
-        Check(closed.count(12), "Manager disconnect did not disconnect owned participants");
+        Check(!closed.count(12), "Manager disconnect did not preserve owned participants");
+        managerHello.update({{"manager_id", managed["owner"]["manager_id"]}, {"server_instance", groups.Instance()}});
+        groups.Open(13, managerHello);
+        Check(groups.Request(13, request("status"))["gfx_game_groups"] == 6, "Resume lost managed groups");
+        groups.Remove(13, true);
+        Check(closed.count(12), "Heartbeat expiry did not disconnect owned participants");
         auto details = request("group_details"); details["group_id"] = gid;
         Check(groups.Operator(details)["connected_players"] == 3, "Manual groups destroyed or people double counted");
         auto lobby = request("create_group"); lobby["type"] = "lobby";

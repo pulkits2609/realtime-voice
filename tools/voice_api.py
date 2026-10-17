@@ -8,6 +8,8 @@ import time
 
 class VoiceAPI:
     def __init__(self, host, port, heartbeat=True):
+        self.host, self.port = host, port
+        self.manager_info = None
         self.socket = socket.create_connection((host, port), timeout=5)
         self.socket.settimeout(None)
         self.heartbeat = heartbeat
@@ -81,6 +83,48 @@ class VoiceAPI:
         if not response["ok"]:
             raise RuntimeError(response["error"])
         return response["data"]
+
+    def hello_manager(self, resume=None):
+        fields = {} if resume is None else {
+            "manager_id": resume["manager_id"], "server_instance": resume["server_instance"]}
+        self.manager_info = self.ok("hello", role="manager", **fields)
+        return self.manager_info
+
+    def reconnect_manager(self):
+        """Resume this public ownership ID; never create replacement groups."""
+        registration = self.manager_info
+        if registration is None:
+            raise ValueError("Register the manager before reconnecting")
+        host, port = self.host, self.port
+        self.close()
+        deadline = time.monotonic() + 1
+        while True:
+            self.__init__(host, port)
+            response = self.request("hello", role="manager", manager_id=registration["manager_id"],
+                server_instance=registration["server_instance"])
+            if response["ok"]:
+                self.manager_info = response["data"]
+                return self.manager_info
+            self.close()
+            # The old handler may not have observed EOF yet. Only this ownership
+            # race is retried; failed resumes do not extend the server deadline.
+            if response["error"]["code"] != "manager_busy" or time.monotonic() >= deadline:
+                raise RuntimeError(response["error"])
+            time.sleep(.01)
+
+    def owned_groups(self):
+        """Reconcile all pages, then fetch current participants for owned Games."""
+        if self.manager_info is None:
+            raise ValueError("Register the manager first")
+        result, after = [], 0
+        while True:
+            page = self.ok("list_groups", after_id=after)
+            for group in page["groups"]:
+                if group["owner"].get("manager_id") == self.manager_info["manager_id"]:
+                    result.append(self.ok("group_details", group_id=group["group_id"]))
+            after = page["next_after_id"]
+            if after is None:
+                return result
 
     def event(self, name, timeout=5):
         deadline = time.monotonic() + timeout

@@ -16,7 +16,7 @@ controlServer(io_context, port){
     controlServer.SetHandlers(
         [this](auto id, const Json& hello){ return groups.Open(id, hello); },
         [this](auto id, const Json& request){ return groups.Request(id, request); },
-        [this](auto id){ groups.Remove(id); }
+        [this](auto id, bool heartbeatExpired){ groups.Remove(id, heartbeatExpired); }
     );
 }
 
@@ -49,6 +49,7 @@ void Server::Run(){
         console = std::thread(&Server::ConsoleLoop, this);
         while(running){
             io_context.poll();
+            groups.Tick();
             if(!running) break;
             try{ HandleMessage(); }
             catch(const boost::system::system_error& error){

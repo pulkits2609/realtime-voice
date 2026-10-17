@@ -49,7 +49,7 @@ JSON frames. Send:
 Example response:
 
 ~~~json
-{"v":2,"id":"manager-hello","ok":true,"data":{"session_id":1,"server_instance":"0123456789abcdef","role":"manager","state":"ready","binding_required":false}}
+{"v":2,"id":"manager-hello","ok":true,"data":{"session_id":1,"server_instance":"0123456789abcdef","role":"manager","state":"ready","binding_required":false,"manager_id":1,"resumed":false,"owned_group_count":0}}
 ~~~
 
 Create the host's Game:
@@ -70,7 +70,7 @@ Complete example response:
     "name":"Friday match",
     "type":"game",
     "phase":"waiting",
-    "owner":{"type":"gfx","session_id":1},
+    "owner":{"type":"gfx","manager_id":1},
     "all_channel_id":1,
     "team_channel_ids":[2,3],
     "connected_players":0,
@@ -272,13 +272,37 @@ Manager heartbeat:
 {"v":2,"op":"pong","nonce":7}
 ~~~
 
-Service it independently of gameplay work. Ten seconds without a valid response
-closes the manager and deletes its Games. A short pause can recover while the SAME
-TCP connection remains open.
+Service it independently of gameplay work. The heartbeat deadline begins at hello
+acceptance and refreshes only on a valid outstanding pong. Ten seconds of silence
+closes the socket and deletes its Games; no additional grace is added.
 
-A closed TCP management connection instead triggers IMMEDIATE cleanup, as agreed
-for this integration. Reconnecting does not restore old groups. Manual groups
-survive manager loss.
+Unexpected TCP loss BEFORE heartbeat expiry instead starts ten seconds of recovery
+from when the server observes the loss. The logical ownership slot stays reserved;
+existing groups, channels, player sessions, team/phase state, selections, and mute
+choices survive and voice continues. A new unrelated manager receives manager_busy.
+
+Reconnect with the public, in-memory registration from the initial hello:
+
+~~~json
+{"v":2,"id":"resume-1","op":"hello","role":"manager","manager_id":1,"server_instance":"0123456789abcdef"}
+~~~
+
+~~~json
+{"v":2,"id":"resume-1","ok":true,"data":{"session_id":9,"server_instance":"0123456789abcdef","role":"manager","state":"ready","binding_required":false,"manager_id":1,"resumed":true,"owned_group_count":1}}
+~~~
+
+session_id changes; manager_id and owned IDs remain. Fetch list_groups pages,
+filter owner.manager_id, then group_details for each retained group. Reconcile
+the GFX allocation map, including operator deletions during the gap. Retained
+groups do not emit fake creation/deletion events, and missed events are not replayed.
+The helper demonstrates hello_manager(), reconnect_manager(), and owned_groups().
+
+Failed resume attempts never extend the deadline. A matching owner can briefly get
+manager_busy until the old handler observes EOF; the helper retries only this
+handoff race for at most one second. Expiry deletes only that owner's groups and
+returns manager_expired on later resume. Manual groups survive. Explicit host
+departure/delete_group and operator deletion remain immediate, including during
+the grace period. manager_id is an ownership identifier, NOT a secret or authentication.
 
 If voice_server stops/restarts, everything it hosted disappears. Existing children
 emit server_disconnected and disconnected; their IPC processes can remain alive.
@@ -299,7 +323,8 @@ python tools/mock_gfx.py --host 127.0.0.1 --port 8080 --client build/voice_clien
 On Ubuntu use build/voice_client without .exe. Remove --no-audio only for a manual
 device test. The mock creates a Game, launches the child, binds its session, changes
 mutes, starts a match, switches transmit, returns to waiting, deletes the group,
-and shuts down the child.
+resumes management without replacing the group/player session, reconciles owned
+groups, and shuts down the child.
 
 The implementation is in tools/mock_gfx.py, tools/voice_api.py, and
 tools/background_voice.py. They demonstrate actual working protocols, not a planned
@@ -308,7 +333,7 @@ GFX implementation. No audio samples pass through these Python control pipes.
 ## Hand this back to the gfx_2d chat
 
 Provide these three documents and tools/mock_gfx.py. Ask that integration to:
-implement the single manager connection/heartbeat, reserve at most five Games,
+implement logical manager registration/resume/heartbeat, reserve at most five Games,
 follow the session_ready -> bind_player -> connected handshake, maintain the
 lifecycle above, and drive one background voice child per gfx.exe.
 

@@ -30,13 +30,14 @@ VoiceGroups::Group& VoiceGroups::FindGroup(std::uint32_t id){
 }
 
 void VoiceGroups::RequireOwner(const Group& group, std::uint32_t caller, bool local){
-    if(!local && group.owner != caller){
+    if(!local && (caller != manager || group.owner != managerId)){
         throw ProtocolError("not_owner", "This management connection does not own the group");
     }
 }
 
 Json VoiceGroups::Open(std::uint32_t id, const Json& hello){
     std::lock_guard<std::mutex> lock(mutex);
+    ExpireManager(Clock::now());
     ValidateRequest(hello);
     if(Text(hello, "op") != "hello"){
         throw ProtocolError("hello_required", "The first request must be hello");
@@ -44,12 +45,27 @@ Json VoiceGroups::Open(std::uint32_t id, const Json& hello){
     Session session;
     const auto role = Text(hello, "role");
     if(role == "manager"){
-        if(manager != 0){
-            throw ProtocolError("manager_busy", "One management connection is already active");
+        if(hello.contains("manager_id")){
+            const auto resume = Number(hello, "manager_id");
+            if(Text(hello, "server_instance", 16) != instanceText){
+                throw ProtocolError("server_restarted", "The supplied server instance no longer exists");
+            }
+            if(resume != managerId){
+                throw ProtocolError("manager_expired", "This logical management ownership no longer exists");
+            }
+            if(manager) throw ProtocolError("manager_busy", "The manager still has an active connection");
+        }
+        else{
+            if(managerId){
+                throw ProtocolError("manager_busy", "Management ownership is active or reserved for recovery");
+            }
+            if(nextManager == 0) throw ProtocolError("ids_exhausted", "Manager IDs exhausted");
+            managerId = nextManager++;
         }
         session.manager = true;
         session.name = "GFX management";
         manager = id;
+        recoveryDeadline = Clock::time_point::max();
     }
     else if(role == "voice"){
         session.name = Text(hello, "name");
@@ -79,9 +95,16 @@ Json VoiceGroups::Open(std::uint32_t id, const Json& hello){
         throw ProtocolError("invalid_request", "role must be voice or manager");
     }
     sessions.emplace(id, std::move(session));
-    return {{"session_id", id}, {"server_instance", instanceText},
+    Json result = {{"session_id", id}, {"server_instance", instanceText},
             {"role", role}, {"state", role == "voice" ? "pending" : "ready"},
             {"binding_required", role == "voice" && groups.at(Number(hello, "group_id")).owner != 0}};
+    if(role == "manager"){
+        unsigned owned = 0;
+        for(const auto& [groupId, group] : groups) if(group.owner == managerId) owned++;
+        result.update({{"manager_id", managerId}, {"resumed", hello.contains("manager_id")},
+                       {"owned_group_count", owned}});
+    }
+    return result;
 }
 
 Json VoiceGroups::Status(std::uint32_t id) const{
@@ -111,7 +134,7 @@ Json VoiceGroups::Status(std::uint32_t id) const{
 
 Json VoiceGroups::Details(const Group& group) const{
     Json result = {{"group_id", group.id}, {"name", group.name}, {"type", group.type},
-        {"phase", group.phase}, {"owner", group.owner ? Json{{"type", "gfx"}, {"session_id", group.owner}}
+        {"phase", group.phase}, {"owner", group.owner ? Json{{"type", "gfx"}, {"manager_id", group.owner}}
                                                      : Json{{"type", "manual"}}},
         {"all_channel_id", group.all}, {"team_channel_ids", group.teams},
         {"connected_players", 0}, {"channels", Json::array()}, {"participants", Json::array()}};
@@ -260,7 +283,7 @@ Json VoiceGroups::Execute(std::uint32_t caller, const Json& request, bool local)
         }
         Group group;
         group.id = nextGroup++;
-        group.owner = local ? 0 : caller;
+        group.owner = local ? 0 : managerId;
         group.type = type;
         group.name = request.contains("name") ? Text(request, "name") : type;
         group.all = nextChannel++;
@@ -375,27 +398,52 @@ Json VoiceGroups::Execute(std::uint32_t caller, const Json& request, bool local)
 
 Json VoiceGroups::Request(std::uint32_t id, const Json& request){
     std::lock_guard<std::mutex> lock(mutex);
+    ExpireManager(Clock::now());
     if(!sessions.count(id)) throw ProtocolError("session_missing", "The session has ended");
+    if(sessions.at(id).manager && id != manager){
+        throw ProtocolError("manager_expired", "This management session no longer owns the slot");
+    }
     return Execute(id, request, false);
 }
 
 Json VoiceGroups::Operator(const Json& request){
     std::lock_guard<std::mutex> lock(mutex);
+    ExpireManager(Clock::now());
     return Execute(0, request, true);
 }
 
-void VoiceGroups::Remove(std::uint32_t id){
+void VoiceGroups::DeleteOwnedGroups(const std::string& reason){
+    const auto owner = managerId;
+    managerId = 0;
+    manager = 0;
+    recoveryDeadline = Clock::time_point::max();
+    std::vector<std::uint32_t> owned;
+    for(const auto& [groupId, value] : groups){
+        if(value.owner == owner) owned.push_back(groupId);
+    }
+    for(auto groupId : owned) Delete(groupId, reason);
+}
+
+void VoiceGroups::ExpireManager(Clock::time_point now){
+    if(managerId && !manager && now >= recoveryDeadline){
+        DeleteOwnedGroups("manager_timeout");
+    }
+}
+
+void VoiceGroups::Tick(){
+    std::lock_guard<std::mutex> lock(mutex);
+    ExpireManager(Clock::now());
+}
+
+void VoiceGroups::Remove(std::uint32_t id, bool heartbeatExpired){
     std::lock_guard<std::mutex> lock(mutex);
     auto found = sessions.find(id);
     if(found == sessions.end()) return;
     const auto group = found->second.group;
-    if(found->second.manager){
+    if(found->second.manager && manager == id){
         manager = 0;
-        std::vector<std::uint32_t> owned;
-        for(const auto& [groupId, value] : groups){
-            if(value.owner == id) owned.push_back(groupId);
-        }
-        for(auto groupId : owned) Delete(groupId, "manager_disconnected");
+        if(heartbeatExpired) DeleteOwnedGroups("manager_timeout");
+        else recoveryDeadline = Clock::now() + std::chrono::seconds(10);
     }
     sessions.erase(id);
     if(group && groups.count(group)) Changed(group);

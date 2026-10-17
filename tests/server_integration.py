@@ -34,7 +34,7 @@ class ServerTests(unittest.TestCase):
         while True:
             try:
                 self.manager = self.peer()
-                self.info = self.manager.ok("hello", role="manager")
+                self.info = self.manager.hello_manager()
                 break
             except OSError:
                 if time.monotonic() >= deadline:
@@ -166,12 +166,64 @@ class ServerTests(unittest.TestCase):
         other = self.peer()
         self.assertEqual(other.request("hello", role="manager")["error"]["code"], "manager_busy")
         group = self.game()
-        player, udp = self.join(group, "managed", 1)
+        self.manager.ok("set_phase", group_id=group["group_id"], phase="playing")
+        a, ua = self.join(group, "a", 1)
+        b, ub = self.join(group, "b", 1)
+        c, uc = self.join(group, "c", 2)
+        b.ok("set_transmit", channel_id=group["all_channel_id"])
+        for peer, udp in ((a, ua), (b, ub), (c, uc)):
+            self.packet(peer, udp, b"")
+        time.sleep(.05)  # Allow the relay to consume endpoint-registration datagrams.
+        before = a.ok("status")
         self.manager.close()
-        player.event("group_deleted", timeout=2)
+        time.sleep(.1)  # Exercise actual traffic while management is disconnected.
+        unrelated = self.peer()
+        self.assertEqual(unrelated.request("hello", role="manager")["error"]["code"], "manager_busy")
+        self.packet(a, ua)
+        self.assertIsNotNone(self.received(ub))
+        self.assertIsNone(self.received(uc))
+        a.ok("set_transmit", channel_id=group["all_channel_id"])
+        self.packet(a, ua)
+        self.assertIsNotNone(self.received(ub)); self.assertIsNotNone(self.received(uc))
         new = self.peer()
-        new.ok("hello", role="manager")
-        self.assertEqual(new.ok("status")["gfx_game_groups"], 0)
+        resumed = new.hello_manager(self.info)
+        self.assertTrue(resumed["resumed"])
+        self.assertNotEqual(resumed["session_id"], self.info["session_id"])
+        self.assertEqual(resumed["manager_id"], self.info["manager_id"])
+        retained = new.owned_groups()[0]
+        for key in ("group_id", "all_channel_id", "team_channel_ids", "phase"):
+            self.assertEqual(retained[key], group[key] if key != "phase" else "playing")
+        current = a.ok("status")
+        for key in ("session_id", "team", "mutes", "receive_revision"):
+            self.assertEqual(current[key], before[key])
+        with new.condition:
+            self.assertFalse(any(e["event"] in ("group_created", "group_deleted") for e in new.events))
+        started = time.monotonic()
+        new.ok("delete_group", group_id=group["group_id"])
+        a.event("group_deleted", timeout=2)
+        self.assertLess(time.monotonic() - started, 2)
+
+    def test_disconnect_grace_expires_only_owned_groups(self):
+        self.server.stdin.write("create lobby grace-manual\n"); self.server.stdin.flush()
+        while True:
+            line = self.lines.get(timeout=5)
+            try:
+                response = json.loads(line)
+                if response.get("ok") and response["data"].get("name") == "grace-manual": break
+            except ValueError: pass
+        manual = response["data"]
+        player, udp = self.join(self.game(), "expiry", 1)
+        started = time.monotonic()
+        self.manager.close()
+        player.event("group_deleted", timeout=12)
+        self.assertGreater(time.monotonic() - started, 9)
+        self.assertLess(time.monotonic() - started, 12)
+        expired = self.peer()
+        self.assertEqual(expired.request("hello", role="manager", manager_id=self.info["manager_id"],
+            server_instance=self.info["server_instance"])["error"]["code"], "manager_expired")
+        fresh = self.peer(); fresh.hello_manager()
+        self.assertEqual(fresh.ok("status")["gfx_game_groups"], 0)
+        self.assertEqual(fresh.ok("status")["groups"][0]["group_id"], manual["group_id"])
 
     def test_heartbeat_timeout_preserves_manual_groups(self):
         self.server.stdin.write("create lobby manual\n")
@@ -194,6 +246,7 @@ class ServerTests(unittest.TestCase):
         started = time.monotonic()
         player.event("group_deleted", timeout=13)
         self.assertGreater(time.monotonic() - started, 7)
+        self.assertLess(time.monotonic() - started, 12)  # No second ten-second grace.
         new = self.peer()
         new.ok("hello", role="manager")
         status = new.ok("status")

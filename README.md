@@ -26,6 +26,11 @@ There is no graphical interface. One server hosts isolated Game groups (All plus
 
 Protocol 2 adds a server-management API and a background voice_client controlled through JSON-lines IPC. See [server API](docs/server-api.md), [client IPC](docs/client-ipc.md), and the [GFX integration contract](docs/gfx-integration.md). Existing v1.0.0 downloads use the old protocol and cannot communicate with this version.
 
+Management ownership survives an unexpected TCP disconnect for ten seconds, so the
+same logical GFX manager can resume while voice continues. Heartbeat expiry and
+explicit group deletion still destroy the affected groups. Resume IDs are public,
+in-memory identifiers, scoped to the server instance; they are not authentication.
+
 ## Current status
 
 The Windows build and local voice pipeline have been tested, including multiple speakers, disconnects, packet loss recovery, domain resolution, and server restarts.

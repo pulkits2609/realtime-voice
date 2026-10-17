@@ -122,6 +122,11 @@ send_revision, receive_revision, peers, decoded_frames, and mixed_frames.
 The selected transmit channel is NOT a receive subscription. A player transmitting
 to All still has All + own Team in receive_channels.
 
+An unexpected manager TCP loss does not disconnect this voice client during the
+ten-second management recovery grace. A successful manager resume leaves these
+session IDs, routes, selections, and mute settings unchanged. If recovery/heartbeat
+expires, the group is deleted and this client reports group_deleted/disconnected.
+
 get_status adds connection_id. Each accepted connect increments this local number.
 All connection-originated events carry connection_id inside data. It scopes events
 even before a server session ID exists. Ignore stale events from another local

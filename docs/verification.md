@@ -93,8 +93,11 @@ For manual inspection:
   listening or sending. Reconnect with a new session ID and approve binding again.
 - Delete a managed group from the operator CLI. Both management and clients must
   receive deletion. GFX should later disable voice without ending gameplay.
-- Close the manager socket. Its groups must disappear immediately; manual groups
-  remain. An open but nonresponding manager times out after ten seconds.
+- Close the manager socket. Voice and group/session IDs must survive for ten seconds.
+  Resume with manager_id/server_instance and reconcile owned groups. Check that an
+  unrelated manager is rejected during grace. Without resume, only the departed
+  manager's groups expire. Heartbeat silence on an open socket expires after ten
+  seconds without adding a second grace. Explicit deletion remains immediate.
 - Restart voice_server. Old server_instance must fail; do not auto-recreate an
   existing game session's voice group.
 - Close the parent's stdin while connected, pending binding, and pending a TCP

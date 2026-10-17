@@ -116,7 +116,8 @@ class BackgroundTests(unittest.TestCase):
         result = subprocess.run([server.sys.executable,
             str(server.Path(__file__).resolve().parents[1] / "tools/mock_gfx.py"),
             "--host", "127.0.0.1", "--port", str(self.port), "--client",
-            str(server.BUILD / ("voice_client" + server.EXE)), "--no-audio"],
+            str(server.BUILD / ("voice_client" + server.EXE)), "--no-audio",
+            "--manager-id", str(self.info["manager_id"]), "--server-instance", self.info["server_instance"]],
             capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Mock GFX lifecycle passed", result.stdout)

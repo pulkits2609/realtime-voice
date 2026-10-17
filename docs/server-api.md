@@ -27,17 +27,21 @@ session/group/channel IDs, revisions, and server_instance are NOT authenticated.
 There are no accounts, secrets, tickets, encryption, or secure UDP registration.
 A process can claim the manager role if the management slot is free.
 
-Exactly one manager TCP connection may be active. Its session ID owns every Game
-it creates. A different live manager receives manager_busy. Management creates
+Exactly one logical manager may own the server, with at most one active TCP
+management connection. A server-assigned manager_id owns its Games; session_id
+identifies only the current socket. A different live manager receives manager_busy. Management creates
 Game groups; the operator CLI creates Game or Lobby groups.
 
 A manager can query the global summary but mutate/query detailed membership only
 for its own groups. The operator can inspect or delete any group. Ordinary voice
 sessions have no creation, deletion, team-assignment, or global-listing commands.
 
-A closed management TCP connection immediately destroys its groups and closes
-their voice sessions. This is intentional: reconnecting establishes a new owner,
-not a recovery/resume of old groups. Manually created groups are unaffected.
+An unexpected TCP loss reserves ownership for ten seconds from the server's
+observation of the disconnect. Groups, channels, participants, routing, phase,
+transmit selection, and mutes remain intact. Voice continues. Only a resume with
+the same manager_id and server_instance can reclaim that reserved ownership.
+These public identifiers provide no authentication. Manually created groups are
+unaffected by management expiry.
 
 ## TCP framing and envelopes
 
@@ -105,8 +109,34 @@ Manager:
 ~~~
 
 ~~~json
-{"v":2,"id":"hello","ok":true,"data":{"session_id":1,"server_instance":"0123456789abcdef","role":"manager","state":"ready","binding_required":false}}
+{"v":2,"id":"hello","ok":true,"data":{"session_id":1,"server_instance":"0123456789abcdef","role":"manager","state":"ready","binding_required":false,"manager_id":1,"resumed":false,"owned_group_count":0}}
 ~~~
+
+Keep manager_id and server_instance in memory for the logical GFX server's run.
+After unexpected TCP loss, open a new connection and send:
+
+~~~json
+{"v":2,"id":"resume","op":"hello","role":"manager","manager_id":1,"server_instance":"0123456789abcdef"}
+~~~
+
+~~~json
+{"v":2,"id":"resume","ok":true,"data":{"session_id":9,"server_instance":"0123456789abcdef","role":"manager","state":"ready","binding_required":false,"manager_id":1,"resumed":true,"owned_group_count":2}}
+~~~
+
+manager_id is a positive uint32, monotonic and never reused in this instance.
+Its namespace is separate from session IDs. Both resume fields are required;
+omitting manager_id requests NEW ownership, which is rejected while reserved.
+An already connected owner returns manager_busy even for a matching resume.
+An unknown/expired ID returns manager_expired. A different instance returns
+server_restarted. Invalid fields return invalid_request. No failed hello changes
+the recovery deadline. If the old handler has not observed EOF yet, retry the
+matching resume after manager_busy within the original deadline.
+
+A successful resume cancels the old recovery deadline without changing group or
+voice session IDs. No group_created/group_deleted event is emitted for retained
+groups. Use list_groups pages, filter owner.manager_id, and fetch group_details
+for current participants. Replace the caller's cached map with this state: operator
+deletions during the gap are absent. There is no replay of missed events.
 
 Voice connection, with an already known Game:
 
@@ -150,9 +180,20 @@ Answer with this special notification; it has no request id and gets no response
 ~~~
 
 Only a valid outstanding nonce refreshes the heartbeat deadline. Duplicate/stale
-pongs and ordinary requests do not. Ten seconds without a valid pong closes the
-connection. For a manager this destroys all its groups. A short pause that recovers
-before the deadline can keep the same connection and groups.
+pongs and ordinary requests do not. The first heartbeat deadline begins when hello
+is accepted; each valid outstanding pong starts a new ten-second deadline.
+Expiry closes TCP and destroys that manager's groups immediately, with NO second
+recovery grace. A short pause can recover on the same socket before this deadline.
+
+Unexpected TCP loss detected BEFORE heartbeat expiry starts the separate recovery
+deadline described above. Once disconnected, failed resume attempts do not refresh
+it. Successful resume starts the new socket's heartbeat budget; stale callbacks,
+pongs on old sockets, and cancelled ownership deadlines cannot affect it.
+
+Recovery expiry deletes the owner's Games exactly once, disconnects their voice
+members, and releases the slot. Explicit delete_group, operator deletion, and
+server shutdown remain immediate. A server restart destroys all state and changes
+server_instance; old resume IDs return server_restarted, never recreate groups.
 
 The background voice client handles these heartbeats itself. The future gfx_server
 must independently service manager heartbeats while gameplay continues.
@@ -180,7 +221,7 @@ gfx_game_groups counts manager-owned Game groups, not manually created groups.
 
 Full group details include group_id, name, type, phase, owner, all_channel_id,
 team_channel_ids, connected_players, channels, and participants.
-owner is {"type":"manual"} or {"type":"gfx","session_id":1}.
+owner is {"type":"manual"} or {"type":"gfx","manager_id":1}.
 
 Each channel has channel_id, name, receive_members, and selected_transmitters.
 receive_members counts eligible subscriptions, even if locally muted; while
@@ -283,7 +324,7 @@ when needed. group_deleted carries group_id/reason. Treat events and creation
 responses idempotently in your group map.
 
 Voice events: state, group_deleted, membership_removed, and ping.
-Deletion reasons include manager_deleted, operator_deleted, manager_disconnected.
+Deletion reasons include manager_deleted, operator_deleted, manager_timeout.
 A group deletion or membership removal is followed by TCP closure. The child
 converts transport loss into local server_disconnected/disconnected events.
 
@@ -292,6 +333,6 @@ group_missing, invalid_group, invalid_channel, invalid_team, invalid_team_count,
 binding_required, binding_mismatch, member_in_use, session_missing, already_joined,
 not_joined, forbidden, not_owner, wrong_role, wrong_group_type, invalid_phase,
 team_disabled, group_full, ids_exhausted, delete_group_required, unknown_operation,
-server_restarted, and connection_error. Framing/heartbeat/send timeouts can instead
+server_restarted, manager_expired, and connection_error. Framing/heartbeat/send timeouts can instead
 close TCP. Invalid requests do not grant membership or change a valid selection.
 

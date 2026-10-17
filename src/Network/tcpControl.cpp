@@ -505,6 +505,7 @@ void TcpControlServer::HandleClient(std::shared_ptr<boost::asio::ip::tcp::socket
     client->socket = socket;
     std::thread writer;
     bool registered = false;
+    auto heartbeatDeadline = Clock::time_point::max();
     Json hello = Json::object();
     const IsAlive alive = [this, client](){ return running.load() && client->active.load(); };
 
@@ -524,6 +525,7 @@ void TcpControlServer::HandleClient(std::shared_ptr<boost::asio::ip::tcp::socket
         }
         const auto data = opened(client->clientId, hello);
         registered = true;
+        heartbeatDeadline = Clock::now() + receiveTimeout;
         // Write hello directly before starting the writer. Events queued during
         // registration cannot overtake this first response.
         const auto acknowledgement = Success(hello, data).dump();
@@ -564,9 +566,8 @@ void TcpControlServer::HandleClient(std::shared_ptr<boost::asio::ip::tcp::socket
             }
         });
 
-        auto lastPong = Clock::now();
         const Tick heartbeat = [&](){
-            if(Clock::now() - lastPong >= receiveTimeout){
+            if(Clock::now() >= heartbeatDeadline){
                 throw ProtocolError("heartbeat_timeout", "No valid heartbeat response for ten seconds");
             }
         };
@@ -581,7 +582,7 @@ void TcpControlServer::HandleClient(std::shared_ptr<boost::asio::ip::tcp::socket
                         continue; // Stale/duplicate pongs never extend the heartbeat deadline.
                     }
                     client->pendingPing = 0;
-                    lastPong = Clock::now();
+                    heartbeatDeadline = Clock::now() + receiveTimeout;
                     continue;
                 }
                 ValidateRequest(request);
@@ -612,7 +613,7 @@ void TcpControlServer::HandleClient(std::shared_ptr<boost::asio::ip::tcp::socket
     client->active = false;
     RemoveClient(client);
     // No transport mutex is held while entering routing state.
-    if(registered && removed) removed(client->clientId);
+    if(registered && removed) removed(client->clientId, Clock::now() >= heartbeatDeadline);
     if(writer.joinable()) writer.join();
     boost::system::error_code ignored;
     socket->close(ignored);
@@ -638,7 +639,7 @@ void TcpControlServer::Stop(){
 void TcpControlServer::SetHandlers(
     std::function<Json(std::uint32_t, const Json&)> open,
     std::function<Json(std::uint32_t, const Json&)> request,
-    std::function<void(std::uint32_t)> remove){
+    std::function<void(std::uint32_t, bool)> remove){
     opened = std::move(open);
     requested = std::move(request);
     removed = std::move(remove);

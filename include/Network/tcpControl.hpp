@@ -55,7 +55,7 @@ class TcpControlServer{
         std::atomic<bool> running{false};
         std::uint32_t nextClientId = 1;
         std::function<Json(std::uint32_t, const Json&)> opened, requested;
-        std::function<void(std::uint32_t)> removed;
+        std::function<void(std::uint32_t, bool)> removed;
 
         void AcceptLoop();
         void HandleClient(std::shared_ptr<boost::asio::ip::tcp::socket> socket);
@@ -68,7 +68,7 @@ class TcpControlServer{
         void Stop();
         void SetHandlers(std::function<Json(std::uint32_t, const Json&)> open,
                          std::function<Json(std::uint32_t, const Json&)> request,
-                         std::function<void(std::uint32_t)> remove);
+                         std::function<void(std::uint32_t, bool)> remove);
         void Send(std::uint32_t id, const Json& message);
         void Close(std::uint32_t id);
 };
