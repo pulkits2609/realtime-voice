@@ -34,6 +34,10 @@ int main(){
         const auto gid = game["group_id"].get<std::uint32_t>();
         const auto all = game["all_channel_id"].get<std::uint32_t>();
         const auto team1 = game["team_channel_ids"][0].get<std::uint32_t>();
+        auto invalidHello = request("hello");
+        invalidHello.update({{"role", "voice"}, {"name", "invalid"}, {"member_id", 17},
+            {"group_id", gid}, {"channel_id", all}});
+        error([&]{ groups.Open(98, invalidHello); }, "invalid_request");
         auto open = [&](unsigned id, const Json& gameInfo, unsigned team){
             auto hello = request("hello");
             hello.update({{"role", "voice"}, {"name", "player"}, {"group_id", gameInfo["group_id"]},
@@ -96,6 +100,11 @@ int main(){
         recipients.clear();
         mute["team"] = true; groups.Request(2, mute); route(1, true);
         Check(recipients.empty(), "Team mute failed");
+        mute.update({{"microphone", false}, {"all", false}, {"team", false}});
+        groups.Request(2, mute);
+        route(1, true);
+        Check(recipients == std::set<unsigned>({2}), "Muted-transmission test needs an eligible receiver");
+        recipients.clear();
         mute.update({{"microphone", true}, {"all", false}, {"team", false}});
         groups.Request(1, mute); route(1, true);
         Check(recipients.empty(), "Muted sender transmitted");

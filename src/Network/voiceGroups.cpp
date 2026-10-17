@@ -54,6 +54,7 @@ Json VoiceGroups::Open(std::uint32_t id, const Json& hello){
     else if(role == "voice"){
         session.name = Text(hello, "name");
         session.intent = hello;
+        if(hello.contains("member_id")) Text(hello, "member_id");
         if(hello.contains("server_instance") && Text(hello, "server_instance", 16) != instanceText){
             throw ProtocolError("server_restarted", "The supplied server instance no longer exists");
         }

@@ -56,12 +56,15 @@ void UdpSocket::SendTo(
 std::vector<std::uint8_t> UdpSocket::ReceiveFrom(
     boost::asio::ip::udp::endpoint& sender
 ){
-    std::array<char,1024> buffer{};
+    // One extra byte detects truncation of oversized datagrams on Linux too.
+    std::array<char,1025> buffer{};
 
     const std::size_t bytesReceived = socket.receive_from(
         boost::asio::buffer(buffer),
         sender
     );
+
+    if(bytesReceived > 1024) return {};
 
     // return std::string(buffer.data(), bytesReceived);
     return std::vector<std::uint8_t>(
