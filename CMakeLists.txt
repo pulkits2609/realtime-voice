@@ -210,3 +210,12 @@ target_include_directories(voice_packet_test PRIVATE
     ${PROJECT_SOURCE_DIR}/include
     ${BOOST_INCLUDE_DIR}
 )
+
+# Shared JSON validation; the applications keep their current transport until migration.
+add_executable(protocol_test src/Tests/protocolTest.cpp)
+target_include_directories(protocol_test PRIVATE include)
+
+enable_testing()
+add_test(NAME opus COMMAND opus_test)
+add_test(NAME voice_packet COMMAND voice_packet_test)
+add_test(NAME protocol COMMAND protocol_test)
