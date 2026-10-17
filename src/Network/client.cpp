@@ -92,7 +92,7 @@ void Client::Run(){
                capturedSamples.generation == mutes->captureGeneration.load() && !mutes->microphone){
                 pcmBuffer.Push(capturedSamples.samples.data(), capturedSamples.samples.size());
             }
-            if(groupId && !mutes->microphone && !session.at("mutes").at("microphone").get<bool>() &&
+            if(groupId && pendingMicMutes == 0 && !mutes->microphone && !session.at("mutes").at("microphone").get<bool>() &&
                pcmBuffer.PopExact(frame.data(), frame.size())){
                 const int encodedBytes = encoder.Encode(frame.data(), static_cast<int>(frame.size()),
                     encodedData.data(), static_cast<int>(encodedData.size()));
@@ -150,12 +150,22 @@ void Client::RequestStop(){
 }
 
 void Client::Post(const Json& request){
-    if(request.at("op") == "set_mutes"){
-        mutes->Set({{"microphone", Boolean(request, "microphone")},
-                    {"all", Boolean(request, "all")}, {"team", Boolean(request, "team")}});
-        audioPlayback.SetEnabled(false);
+    const bool changingMutes = request.at("op") == "set_mutes";
+    unsigned changes = 0;
+    if(changingMutes){
+        const Json values = {{"microphone", Boolean(request, "microphone")},
+                             {"all", Boolean(request, "all")}, {"team", Boolean(request, "team")}};
+        // Booleans alone cannot identify a quick mute -> unmute round trip.
+        if(values["microphone"] != mutes->microphone.load()) changes |= 1;
+        if(values["all"] != mutes->all.load() || values["team"] != mutes->team.load()) changes |= 2;
+        if(changes & 1) pendingMicMutes++;
+        if(changes & 2) pendingIncomingMutes++;
+        mutes->Set(values);
+        if(changes & 2) audioPlayback.SetEnabled(false);
     }
-    if(!running || !commands.TryPush(request)){
+    if(!running || !commands.TryPush(ClientCommand{request, changes})){
+        if(changes & 1) pendingMicMutes--;
+        if(changes & 2) pendingIncomingMutes--;
         throw ProtocolError("not_connected", "Voice is disconnected or its command queue is full");
     }
     NotifyWork();
@@ -189,15 +199,26 @@ Json Client::GetStatus() const{
 void Client::ClearAudio(){
     captureQueue.Clear();
     pcmBuffer.Clear();
+    ClearIncoming();
+}
+
+void Client::ClearIncoming(){
     networkQueue.Clear();
     audioPlayback.Clear();
     remoteClients.clear();
 }
 
 void Client::ProcessCommands(){
-    Json request;
-    while(commands.Pop(request)){
+    ClientCommand command;
+    while(commands.Pop(command)){
+        const auto& request = command.request;
+        const auto changes = command.muteChanges;
+        const bool changingMutes = request.at("op") == "set_mutes";
+        if(changes & 1){ captureQueue.Clear(); pcmBuffer.Clear(); encoder.Reset(); }
+        if(changes & 2) ClearIncoming();
         if(request.at("op") == "set_mutes" && groupId == 0){
+            if(changes & 1) pendingMicMutes--;
+            if(changes & 2) pendingIncomingMutes--;
             emit(Success(request, {{"mutes", mutes->Snapshot()}, {"applied", false}}));
             emit(Event("mute_changed", mutes->Snapshot()));
             continue;
@@ -208,8 +229,11 @@ void Client::ProcessCommands(){
             }
             controlClient.Post(request);
             pendingRequests.insert(Text(request, "id"));
+            if(changingMutes) muteRequests[Text(request, "id")] = changes;
         }
         catch(const ProtocolError& error){
+            if(changes & 1) pendingMicMutes--;
+            if(changes & 2) pendingIncomingMutes--;
             emit(Failure(request, error.code, error.what()));
         }
     }
@@ -463,7 +487,7 @@ void Client::ProcessControlEvents(){
                 const bool joined = groupId == 0 && nextGroup != 0;
                 const auto oldTransmit = session.value("transmit_channel_id", 0u);
                 if(nextGroup != groupId || nextReceive != receiveRevision){
-                    ClearAudio();
+                    ClearIncoming();
                 }
                 if(nextSend != sendRevision){
                     mutes->captureGeneration++;
@@ -530,9 +554,16 @@ void Client::ProcessControlEvents(){
                 }
                 continue;
             }
+            const auto mute = muteRequests.find(id);
+            const bool changedMutes = mute != muteRequests.end();
+            if(changedMutes){
+                if(mute->second & 1) pendingMicMutes--;
+                if(mute->second & 2) pendingIncomingMutes--;
+                muteRequests.erase(mute);
+            }
             pendingRequests.erase(id);
             emit(message);
-            if(message.value("ok", false) && message.at("data").contains("mutes")){
+            if(message.value("ok", false) && changedMutes){
                 emit(Event("mute_changed", mutes->Snapshot()));
             }
         }
@@ -561,8 +592,9 @@ void Client::Stop(){
         emit(Failure(Json{{"id", id}}, "disconnected", "Voice disconnected before the response arrived"));
     }
     pendingRequests.clear();
-    Json request;
-    while(commands.Pop(request)) emit(Failure(request, "disconnected", "Voice disconnected"));
+    muteRequests.clear();
+    ClientCommand command;
+    while(commands.Pop(command)) emit(Failure(command.request, "disconnected", "Voice disconnected"));
     activeClients.clear();
     remoteClients.clear();
     groupId = 0;
@@ -767,7 +799,7 @@ void Client::ProcessPlayback(
     }
 
     // One mixed frame per deadline, regardless of the speaker count.
-    const bool enabled = session.contains("mutes") &&
+    const bool enabled = pendingIncomingMutes == 0 && session.contains("mutes") &&
         session["mutes"]["all"] == mutes->all.load() &&
         session["mutes"]["team"] == mutes->team.load();
     audioPlayback.SetEnabled(enabled);

@@ -76,7 +76,13 @@ class Client{
         std::uint32_t groupId = 0, allChannel = 0, teamChannel = 0;
         std::uint32_t sendRevision = 0, receiveRevision = 0;
         std::set<std::string> pendingRequests;
-        ThreadSafeQueue<Json> commands{128};
+        std::map<std::string, unsigned> muteRequests;
+        std::atomic<unsigned> pendingMicMutes{0}, pendingIncomingMutes{0};
+        struct ClientCommand{
+            Json request;
+            unsigned muteChanges = 0; // bit 1: microphone; bit 2: incoming routes
+        };
+        ThreadSafeQueue<ClientCommand> commands{128};
         mutable std::mutex statusMutex;
         Json published = {{"state", "connecting"}};
         std::atomic<std::uint64_t> decodedFrames{0}, mixedFrames{0};
@@ -87,6 +93,7 @@ class Client{
         };
         void Publish();
         void ClearAudio();
+        void ClearIncoming();
         void StartAudio();
         void ProcessCommands();
 

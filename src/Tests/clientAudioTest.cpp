@@ -87,6 +87,19 @@ struct ClientAudioTest{
         mutes->Set({{"microphone", true}, {"all", true}, {"team", true}});
         Check(mutes->captureGeneration > generation, "Mute did not invalidate captured audio");
         client.ClearAudio();
+        mutes->Set({{"microphone", false}, {"all", false}, {"team", false}});
+        Json mute = {{"v", 2}, {"id", "mute"}, {"op", "set_mutes"},
+                     {"microphone", false}, {"all", true}, {"team", false}};
+        client.Post(mute);
+        mute["id"] = "unmute"; mute["all"] = false;
+        client.Post(mute);
+        Check(client.pendingMicMutes == 0, "Incoming mute paused the microphone");
+        packet.SetContext(42, 1, 100, 3, 5);
+        client.networkQueue.Push(packet.Serialize());
+        client.ProcessReceivedVoice();
+        for(auto& [id, remote] : client.remoteClients) remote.playbackStart = now;
+        client.ProcessPlayback(now, 0);
+        Check(!client.audioPlayback.enabled, "Quick mute/unmute resumed old audio before acknowledgement");
     }
 };
 
