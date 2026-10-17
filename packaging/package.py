@@ -41,8 +41,10 @@ def common_files(stage, version, target):
     shutil.copy2(PROJECT / "README.md", stage / "README.md")
     (stage / "packaging").mkdir()
     shutil.copy2(PROJECT / "packaging/README.md", stage / "packaging/README.md")
+    shutil.copytree(PROJECT / "docs", stage / "docs")
     notices = stage / "licenses"
     notices.mkdir()
+    shutil.copy2(PROJECT / "include/third_party/nlohmann/LICENSE.MIT", notices / "nlohmann-json.txt")
     with urllib.request.urlopen(BOOST_LICENSE, timeout=30) as response:
         (notices / "Boost.txt").write_bytes(response.read())
     miniaudio = (PROJECT / "include/third_party/miniaudio.h").read_text(encoding="utf-8")
@@ -99,8 +101,7 @@ def windows_package(stage):
     build_command = f'call "{PROJECT / "build.bat"}" -release'
     run(environment["COMSPEC"] + ' /d /s /c "' + build_command + '"', env=environment)
     build = PROJECT / "build"
-    for test in ("opus_test", "voice_packet_test"):
-        run([build / (test + ".exe")], env=environment)
+    run(["ctest", "--test-dir", build, "--output-on-failure"], env=environment)
 
     cache = (build / "CMakeCache.txt").read_text(encoding="utf-8")
     # Use the package CMake actually linked, even when another vcpkg is installed.
@@ -144,8 +145,10 @@ def windows_package(stage):
           "Extract the entire ZIP before running; keep all DLLs beside the executables.\n"
           "In PowerShell, from this folder:\n"
           "  .\\voice_server.exe 8080\n"
-          "In a second terminal:\n"
-          "  .\\voice_client.exe 127.0.0.1 8080 your_name\n"
+          "In the server terminal, enter: create lobby\n"
+          "Use the printed group/channel IDs. For example, if both are 1:\n"
+          "  .\\voice_client.exe 127.0.0.1 8080 your_name 1 1\n"
+          "In the client terminal: mic on, then all on (muted defaults).\n"
           "For another computer, replace 127.0.0.1 with the server's address.\n"
           "Allow the server port through its firewall for both TCP and UDP.\n"
           "Use headphones. Stop with Ctrl+C.\n")
@@ -167,8 +170,7 @@ def linux_package(stage, source_stage):
     run(["cmake", "-S", PROJECT, "-B", build, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
          "-DCMAKE_EXE_LINKER_FLAGS=-static-libgcc -static-libstdc++"])
     run(["cmake", "--build", build, "--parallel", str(min(os.cpu_count() or 2, 4))])
-    for test in ("opus_test", "voice_packet_test"):
-        run([build / test])
+    run(["ctest", "--test-dir", build, "--output-on-failure"])
 
     (stage / "bin").mkdir()
     (stage / "lib/alsa-lib").mkdir(parents=True)
@@ -246,8 +248,10 @@ def linux_package(stage, source_stage):
     write(stage / "RUN.txt", "Ubuntu 22.04+ x86_64.\n"
           "Extract the entire archive. From the extracted folder:\n"
           "  ./voice_server 8080\n"
-          "In a second terminal:\n"
-          "  ./voice_client 127.0.0.1 8080 your_name\n"
+          "In the server terminal, enter: create lobby\n"
+          "Use the printed group/channel IDs. For example, if both are 1:\n"
+          "  ./voice_client 127.0.0.1 8080 your_name 1 1\n"
+          "In the client terminal: mic on, then all on (muted defaults).\n"
           "Use these launchers, not the executables inside bin/.\n"
           "No compiler, Python, Boost, or Opus installation is needed to run this package.\n"
           "The host supplies glibc, its audio service/drivers, and actual audio devices.\n"

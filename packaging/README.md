@@ -4,19 +4,23 @@ Release users extract the archive and run the applications. They do not run setu
 
 The maintainer needs Python 3.10 or newer. The packaging script builds Release, runs the existing tests, and excludes test executables and debug symbols. Generated files go into `dist/`, which is ignored by Git.
 
+The examples below use `v2.0.0` as a prospective release version. Protocol 2 is
+incompatible with the published v1.0.0 applications; use a new version when
+publishing. Packaging does not create a Git tag, push, or publish a release.
+
 ## Windows x64
 
 Run the usual project setup once if build tools are missing, then:
 
 ```powershell
-python packaging/package.py v1.0.0
+python packaging/package.py v2.0.0
 ```
 
 The script initializes x64 Visual Studio tools and calls `build.bat -release`. It scans executable and DLL imports recursively and copies required Opus and Microsoft runtime DLLs from their package/redistributable locations.
 
-Output: `realtime-voice-v1.0.0-windows-x64.zip` and its `.sha256` file.
+Output: `realtime-voice-v2.0.0-windows-x64.zip` and its `.sha256` file.
 
-The ZIP includes the client, server, required DLLs, usage instructions, and license notices. Windows 10/11 x64 supplies its OS libraries and audio drivers. Microsoft runtime DLLs retain Microsoft's redistribution terms; they are copied from Visual Studio's redistributable directory, not System32.
+The ZIP includes the client, server, required DLLs, API documentation, usage instructions, and license notices, including nlohmann/json. Windows 10/11 x64 supplies its OS libraries and audio drivers. Microsoft runtime DLLs retain Microsoft's redistribution terms; they are copied from Visual Studio's redistributable directory, not System32.
 
 ## Ubuntu x86_64
 
@@ -50,7 +54,7 @@ docker run --rm --platform linux/amd64 \
         tar --exclude=.git --exclude=build --exclude=dist \
             -C /source -cf - . | tar -C /work -xf -
         cd /work
-        python3 packaging/package.py v1.0.0 --output /output
+        python3 packaging/package.py v2.0.0 --output /output
     '
 ```
 
@@ -59,15 +63,15 @@ All installations and upgrades above happen inside the disposable container. The
 On a prepared Ubuntu 22.04 build machine:
 
 ```bash
-python3 packaging/package.py v1.0.0
+python3 packaging/package.py v2.0.0
 ```
 
 Enable source repositories (`deb-src`). The script downloads exact source packages matching the shared libraries. If an old installed library's source version is unavailable, update that library in the build environment and retry.
 
 Output:
 
-- `realtime-voice-v1.0.0-ubuntu-x86_64.tar.gz`
-- `realtime-voice-v1.0.0-ubuntu-x86_64-library-sources.tar.gz`
+- `realtime-voice-v2.0.0-ubuntu-x86_64.tar.gz`
+- `realtime-voice-v2.0.0-ubuntu-x86_64-library-sources.tar.gz`
 - A `.sha256` file for each archive.
 
 Publish the library sources alongside the Ubuntu binary and preserve license notices. Users do not need that source archive to run the applications.
@@ -81,10 +85,10 @@ Users run the top-level `voice_client` and `voice_server` launchers, which locat
 3. Verify Ubuntu 22.04 and a newer supported Ubuntu installation.
 4. Keep library sources available alongside the Ubuntu download.
 5. Review and commit the packaging/license changes.
-6. Push the commit and create the `v1.0.0` tag yourself.
+6. Push the commit and create the chosen version tag yourself.
 7. Create one GitHub release with both application archives, the library sources, and all checksums.
 
 GitHub's automatic source archives contain source code, not runnable applications. Attach the generated files in `dist/` as release assets.
 
-For another release, change `v1.0.0` in the commands. Re-running a version replaces that version's generated archives locally.
+For another release, change `v2.0.0` in the commands. Re-running a version replaces that version's generated archives locally.
 
