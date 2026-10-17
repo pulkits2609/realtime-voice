@@ -20,6 +20,17 @@ allocate processes or extra ports. The server starts with no groups.
 There is no disk persistence. Restarting the server destroys every session, group,
 and channel. Its server_instance changes on every start.
 
+For launchers/tests, stdout emits a flushed JSON event only after both transports
+are bound and the TCP accept loop has started:
+
+~~~json
+{"v":2,"event":"server_ready","data":{"port":8080,"tcp":true,"udp":true}}
+~~~
+
+This is a process log, not a TCP frame. The preliminary Starting Voice Server
+message is not readiness. Socket startup failures emit server_error to stderr
+with code address_in_use or socket_error, native_code, and message, then exit 1.
+
 ## Trust model and ownership
 
 This version is for trusted testing. Roles, names, supplied member_id values,

@@ -153,18 +153,16 @@ class BackgroundTests(unittest.TestCase):
 
     def test_server_restart_rejects_old_instance(self):
         old_group = self.game()
-        listener = socket.socket(); listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]; listener.close()
-        replacement = subprocess.Popen([str(server.BUILD / ("voice_server" + server.EXE)), str(port)],
-            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
+        runner = server.ServerProcess(server.BUILD)
+        self.addCleanup(runner.close)
+        runner.start()
+        port = runner.port
         manager = None
         try:
-            deadline = time.monotonic() + 5
-            while manager is None:
-                try: manager = VoiceAPI("127.0.0.1", port)
-                except OSError:
-                    if time.monotonic() > deadline: raise
-                    time.sleep(.02)
+            with VoiceAPI("127.0.0.1", port) as old:
+                self.assertEqual(old.request("hello", role="manager", manager_id=self.info["manager_id"],
+                    server_instance=self.info["server_instance"])["error"]["code"], "server_restarted")
+            manager = VoiceAPI("127.0.0.1", port)
             new_instance = manager.ok("hello", role="manager")["server_instance"]
             replacement_group = manager.ok("create_group", type="game", teams=2)
             self.assertEqual(old_group["group_id"], replacement_group["group_id"])
@@ -178,10 +176,7 @@ class BackgroundTests(unittest.TestCase):
             self.assertEqual(manager.ok("group_details", group_id=replacement_group["group_id"])["connected_players"], 0)
         finally:
             if manager: manager.close()
-            replacement.stdin.write("shutdown\n"); replacement.stdin.flush()
-            try: replacement.wait(timeout=8)
-            except subprocess.TimeoutExpired: replacement.kill(); replacement.wait()
-            replacement.stdin.close()
+            runner.close()
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ int main(
 
         return 1;
     }
-    std::cout << "Voice Server started!\n";
+    std::cout << "Starting Voice Server...\n";
     
     try{
 
@@ -33,6 +33,12 @@ int main(
         );
 
         server.Run();
+    }
+    catch(const boost::system::system_error& e){
+        std::cerr << Event("server_error", {
+            {"code", e.code() == boost::asio::error::address_in_use ? "address_in_use" : "socket_error"},
+            {"native_code", e.code().value()}, {"message", e.what()}}).dump() << std::endl;
+        return 1;
     }
     catch(const std::exception& e){
         std::cerr<<"Server Error : "<<

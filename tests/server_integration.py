@@ -9,37 +9,33 @@ import sys
 import threading
 import time
 import unittest
+from unittest.mock import patch
+from server_process import ServerProcess, available_port
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from voice_api import VoiceAPI
 
-BUILD = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path("build").resolve()
-sys.argv = sys.argv[:1]
+BUILD = Path("build").resolve()
+if len(sys.argv) > 1 and Path(sys.argv[1]).is_dir():
+    BUILD = Path(sys.argv.pop(1)).resolve()
 EXE = ".exe" if sys.platform == "win32" else ""
 
 
 class ServerTests(unittest.TestCase):
     def setUp(self):
-        listener = socket.socket()
-        listener.bind(("127.0.0.1", 0))
-        self.port = listener.getsockname()[1]
-        listener.close()
-        self.lines = queue.Queue()
-        self.server = subprocess.Popen([str(BUILD / ("voice_server" + EXE)), str(self.port)],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-        self.reader = threading.Thread(target=lambda: [self.lines.put(line) for line in self.server.stdout])
-        self.reader.start()
         self.peers, self.udp = [], []
-        deadline = time.monotonic() + 5
-        while True:
-            try:
-                self.manager = self.peer()
-                self.info = self.manager.hello_manager()
-                break
-            except OSError:
-                if time.monotonic() >= deadline:
-                    raise
-                time.sleep(.03)
+        self.server_process = ServerProcess(BUILD)
+        # unittest does not call tearDown when setUp raises.
+        self.addCleanup(ServerTests.tearDown, self)
+        self.server_process.start()
+        self.port, self.server = self.server_process.port, self.server_process.process
+        self.lines = self.server_process.lines
+        try:
+            self.manager = self.peer()
+            self.info = self.manager.hello_manager()
+        except Exception as error:
+            raise RuntimeError(f"Control hello failed after readiness: {error}\n"
+                + self.server_process.diagnostics()) from error
 
     def peer(self, heartbeat=True):
         peer = VoiceAPI("127.0.0.1", self.port, heartbeat)
@@ -47,22 +43,14 @@ class ServerTests(unittest.TestCase):
         return peer
 
     def tearDown(self):
+        failures = []
         for peer in self.peers:
-            peer.close()
+            try: peer.close()
+            except Exception as error: failures.append(error)
         for udp in self.udp:
             udp.close()
-        if self.server.poll() is None:
-            self.server.stdin.write("shutdown\n")
-            self.server.stdin.flush()
-        try:
-            self.server.wait(timeout=8)
-        except subprocess.TimeoutExpired:
-            self.server.kill()
-            self.server.wait()
-            self.fail("Server failed to shut down")
-        self.server.stdin.close()
-        self.reader.join(timeout=5)
-        self.server.stdout.close()
+        self.server_process.close()
+        if failures: raise failures[0]
 
     def game(self, teams=2):
         return self.manager.ok("create_group", type="game", teams=teams)
@@ -323,6 +311,74 @@ class ServerTests(unittest.TestCase):
             reader.join(timeout=5)
             client.stderr.close()
             client.stdout.close()
+
+
+class StartupTests(unittest.TestCase):
+    def test_ready_binds_both_transports(self):
+        runner = ServerProcess(BUILD)
+        self.addCleanup(runner.close)
+        runner.start()
+        with VoiceAPI("127.0.0.1", runner.port) as peer:
+            self.assertEqual(peer.hello_manager()["state"], "ready")
+        self.assertTrue(runner.ready)
+        self.assertEqual(len(runner.attempts), 1)
+
+    def test_occupied_ports_report_failure_and_cleanup(self):
+        for transport in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
+            with self.subTest(transport=transport), socket.socket(socket.AF_INET, transport) as occupied:
+                if sys.platform == "win32":
+                    occupied.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                occupied.bind(("0.0.0.0", 0))
+                if transport == socket.SOCK_STREAM: occupied.listen()
+                runner = ServerProcess(BUILD, port=occupied.getsockname()[1])
+                self.addCleanup(runner.close)
+                with self.assertRaisesRegex(RuntimeError, "exited early") as failure:
+                    runner.start()
+                # Windows reports WSAEACCES for a TCP socket blocked by an
+                # exclusive owner. Do not classify/retry that as address-in-use.
+                code = "socket_error" if sys.platform == "win32" and transport == socket.SOCK_STREAM else "address_in_use"
+                for expected in (str(runner.executable), str(runner.port), code, "exit_status=1"):
+                    self.assertIn(expected, str(failure.exception))
+                self.assertIsNotNone(runner.process.poll())
+                self.assertFalse(runner.reader.is_alive())
+                self.assertTrue(runner.process.stdin.closed and runner.process.stdout.closed)
+
+    def test_only_identified_allocation_race_is_retried(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as occupied:
+            occupied.bind(("0.0.0.0", 0))
+            blocked, free = occupied.getsockname()[1], available_port()
+            runner = ServerProcess(BUILD)
+            self.addCleanup(runner.close)
+            with patch("server_process.available_port", side_effect=[blocked, free]): runner.start()
+            self.assertEqual([item["port"] for item in runner.attempts], [blocked, free])
+            self.assertIn("address_in_use", runner.attempts[0]["diagnostics"])
+
+    def test_alive_without_readiness_is_not_retried(self):
+        runner = ServerProcess(BUILD, startup_timeout=.2)
+        self.addCleanup(runner.close)
+        real_popen = subprocess.Popen
+        def stalled(arguments, **options):
+            return real_popen([sys.executable, "-c", "import sys; sys.stdin.read()"], **options)
+        with patch("server_process.subprocess.Popen", side_effect=stalled):
+            with self.assertRaisesRegex(RuntimeError, "alive without readiness"):
+                runner.start()
+        self.assertEqual(len(runner.attempts), 1)
+        self.assertIsNotNone(runner.process.poll())
+        self.assertFalse(runner.reader.is_alive())
+
+    def test_setup_failure_runs_registered_cleanup(self):
+        class FailingSetup(unittest.TestCase):
+            def setUp(inner):
+                inner.runner = ServerProcess(BUILD)
+                inner.addCleanup(inner.runner.close)
+                inner.runner.start()
+                raise RuntimeError("Intentional failure after startup")
+            def runTest(inner): pass
+        case, result = FailingSetup(), unittest.TestResult()
+        case.run(result)
+        self.assertEqual(len(result.errors), 1)
+        self.assertIsNotNone(case.runner.process.poll())
+        self.assertFalse(case.runner.reader.is_alive())
 
 
 if __name__ == "__main__":

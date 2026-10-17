@@ -46,6 +46,8 @@ void Server::Run(){
         socket.Bind(port);
         socket.SetNonBlocking(true);
         controlServer.Start();
+        // Flush only after UDP is bound and TCP is listening/accepting.
+        std::cout << Event("server_ready", {{"port", port}, {"tcp", true}, {"udp", true}}).dump() << std::endl;
         console = std::thread(&Server::ConsoleLoop, this);
         while(running){
             io_context.poll();

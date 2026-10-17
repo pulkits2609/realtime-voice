@@ -41,6 +41,35 @@ code. Neither is an objective/perceptual speech-quality assessment.
 
 ## Completed build verification
 
+### Startup diagnostics
+
+The shared tests/server_process.py fixture checks the chosen wildcard IPv4 port
+for BOTH TCP and UDP. There is still a release-to-child-bind allocation race.
+Only a structured address_in_use failure from an exited server permits one retry
+with a new dual-checked port; other failures and test assertions are never retried.
+Intentional collision tests exercise this path and print its diagnostics.
+
+Each startup waits at most eight seconds for the flushed server_ready event emitted
+after both binds and TCP accept startup. The fixture then performs one control
+hello. Failure reports the executable, port, exit status, bounded combined output,
+and whether the process exited early or stayed alive without readiness. Cleanup
+is registered before startup, including when unittest setUp fails, and stops only
+that fixture's Popen process, closes pipes, and joins its reader.
+
+The original intermittent Windows ConnectionRefusedError was not reproduced with
+evidence proving its cause. TCP-only port selection, missing readiness, and missing
+setUp-failure cleanup were confirmed fixture defects; UDP collisions are a tested
+possible cause, not a claimed explanation of the original failures.
+
+To repeat complete integration suites without retrying a failed assertion:
+
+~~~text
+ctest --test-dir build -R "server_integration|background_integration" --repeat until-fail:5 --output-on-failure
+~~~
+
+until-fail repeats successful tests and stops that test on its first failure.
+For focused readiness/failure checks: python tests/server_integration.py build StartupTests.
+
 This update was built and the registered suites run on Windows x64 / MSVC and
 Ubuntu 22.04 / GCC 11. The Ubuntu tests ran in an isolated WSL-hosted environment.
 This does not establish native audio-device behavior on every Ubuntu desktop.
