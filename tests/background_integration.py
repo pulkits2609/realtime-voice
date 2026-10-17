@@ -111,6 +111,31 @@ class BackgroundTests(unittest.TestCase):
         child.event("disconnected")
         self.assertEqual(child.ok("get_status")["state"], "disconnected")
 
+    def test_mock_external_application(self):
+        self.manager.close()
+        result = subprocess.run([server.sys.executable,
+            str(server.Path(__file__).resolve().parents[1] / "tools/mock_gfx.py"),
+            "--host", "127.0.0.1", "--port", str(self.port), "--client",
+            str(server.BUILD / ("voice_client" + server.EXE)), "--no-audio"],
+            capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Mock GFX lifecycle passed", result.stdout)
+
+    def test_eof_during_pending_handshake(self):
+        listener = socket.socket(); listener.bind(("127.0.0.1", 0)); listener.listen()
+        child = self.child()
+        accepted = None
+        try:
+            child.ok("connect", host="127.0.0.1", port=listener.getsockname()[1], name="pending",
+                member_id="pending", server_instance=self.info["server_instance"],
+                group_id=1, channel_id=1, audio=False)
+            listener.settimeout(5)
+            accepted, _ = listener.accept()  # Intentionally never answer hello.
+            child.close()
+        finally:
+            if accepted: accepted.close()
+            listener.close()
+
     def test_eof_with_unread_stdout(self):
         child = subprocess.Popen([str(server.BUILD / ("voice_client" + server.EXE)), "--ipc"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -141,6 +166,7 @@ class BackgroundTests(unittest.TestCase):
                     time.sleep(.02)
             new_instance = manager.ok("hello", role="manager")["server_instance"]
             replacement_group = manager.ok("create_group", type="game", teams=2)
+            self.assertEqual(old_group["group_id"], replacement_group["group_id"])
             self.assertNotEqual(new_instance, self.info["server_instance"])
             child = self.child()
             child.ok("connect", host="127.0.0.1", port=port, name="old", member_id="old",

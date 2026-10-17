@@ -11,6 +11,8 @@ The project is intentionally small enough to read and understand. My priority ha
 - Captures microphone audio and sends it as Opus packets.
 - Relays voice through a central server.
 - Supports multiple connected participants and mixes simultaneous speakers on each client.
+- Isolates Game/Lobby groups with authoritative All/Team routing.
+- Provides independent runtime mutes and a background-client API.
 - Uses TCP for joining, participant updates, heartbeats, and disconnects.
 - Uses UDP for voice packets.
 - Accepts an IPv4 address or a domain name when starting a client.
@@ -20,7 +22,9 @@ The project is intentionally small enough to read and understand. My priority ha
 - Recovers from large packet gaps without playing a long backlog of stale audio.
 - Handles Ctrl+C and cleans up connections, audio devices, and worker threads.
 
-There is no graphical interface. You start the server and clients from a terminal, and connected clients begin transmitting microphone audio automatically.
+There is no graphical interface. One server hosts isolated Game groups (All plus 2-4 Teams) and standalone Lobby groups. Clients join existing groups; microphone, incoming All, and incoming Team start muted.
+
+Protocol 2 adds a server-management API and a background voice_client controlled through JSON-lines IPC. See [server API](docs/server-api.md), [client IPC](docs/client-ipc.md), and the [GFX integration contract](docs/gfx-integration.md). Existing v1.0.0 downloads use the old protocol and cannot communicate with this version.
 
 ## Current status
 
@@ -248,6 +252,12 @@ Start the server first, then start the clients in separate terminals.
 
 The port must be between `1` and `65535`. The following examples use `8080`.
 
+After starting a fresh server, enter `create lobby` in its terminal. It prints group/channel IDs. These examples assume both are `1`; use the actual IDs if different.
+
+For a manual Game, use `create game 2` (or 3/4), and supply the client's team after the channel ID. The operator can use `phase <group_id> playing` to enable Team transmission. `create` alone offers interactive prompts.
+
+Other server commands: `list`, `show <group_id>`, `delete <group_id>`, and `shutdown`.
+
 ### Windows
 
 Server:
@@ -259,13 +269,13 @@ Server:
 First client:
 
 ```powershell
-.\build\voice_client.exe 127.0.0.1 8080 pulkit
+.\build\voice_client.exe 127.0.0.1 8080 pulkit 1 1
 ```
 
 Second client, in another terminal:
 
 ```powershell
-.\build\voice_client.exe 127.0.0.1 8080 rover
+.\build\voice_client.exe 127.0.0.1 8080 rover 1 1
 ```
 
 ### Ubuntu
@@ -279,28 +289,34 @@ Server:
 First client:
 
 ```bash
-./build/voice_client 127.0.0.1 8080 pulkit
+./build/voice_client 127.0.0.1 8080 pulkit 1 1
 ```
 
 Second client, in another terminal:
 
 ```bash
-./build/voice_client 127.0.0.1 8080 rover
+./build/voice_client 127.0.0.1 8080 rover 1 1
 ```
 
 Client arguments follow this order:
 
 ```text
-voice_client <server_address> <server_port> <client_name>
+voice_client <server_address> <server_port> <client_name> <group_id> <channel_id> [team] [--no-audio]
 ```
 
 Names can contain spaces if quoted:
 
 ```powershell
-.\build\voice_client.exe 127.0.0.1 8080 "Pulkit Sharma"
+.\build\voice_client.exe 127.0.0.1 8080 "Pulkit Sharma" 1 1
 ```
 
 Use a name between 1 and 64 bytes. Names are display labels; they are not authentication credentials.
+
+In the client terminal: `mic on` opens the microphone, `all on` listens to All/Lobby, and `team on` listens to Team. `off` mutes the named control. All three start muted. `tx <channel_id>` changes the transmit destination; `status` shows routing and mutes.
+
+Transmitting to All still permits receiving your own Team. Team transmission is disabled while waiting. Lobby has only its shared All-like route.
+
+Other applications launch `voice_client --ipc` and follow [the background API](docs/client-ipc.md). Audio goes directly to voice_server, never through IPC or a gameplay server.
 
 Press **Ctrl+C** to stop either program. The server releases its sockets during shutdown so the same port can be used again.
 
@@ -315,7 +331,7 @@ Run the server on one computer. On the other computers, replace `127.0.0.1` with
 For example, if the server is at `192.168.1.50`:
 
 ```powershell
-.\build\voice_client.exe 192.168.1.50 8080 rover
+.\build\voice_client.exe 192.168.1.50 8080 rover 1 1
 ```
 
 `127.0.0.1` always points to the computer running the client.
@@ -327,7 +343,7 @@ Allow the selected port through the server's firewall for **both TCP and UDP**.
 The client resolves domain names to IPv4 addresses:
 
 ```powershell
-.\build\voice_client.exe voice.example.com 8080 pulkit
+.\build\voice_client.exe voice.example.com 8080 pulkit 1 1
 ```
 
 Replace `voice.example.com` with your own domain. It must resolve to a reachable server IPv4 address.
@@ -375,7 +391,15 @@ These files contain machine-specific paths and are ignored by Git.
 
 ## Tests
 
-The build creates two standalone test executables.
+Run the complete test set after building:
+
+```text
+ctest --test-dir build --output-on-failure
+```
+
+Five C++ executables cover the codec, packets, JSON validation, group routing, and client mixing/PLC. With Python available at CMake configuration, CTest also runs the live server and background-process suites. These use simulated/device-free audio and do not need microphone access.
+
+For the original codec and base-packet checks individually:
 
 ### Windows
 
@@ -397,9 +421,9 @@ The build creates two standalone test executables.
 
 The Opus test prints more information in Debug builds. A successful Release run may produce no output. Both tests return a nonzero exit code on failure.
 
-These are focused checks, not a complete networking or audio-quality test suite.
+Hardware listening tests and Internet/NAT testing are still required. Automated tests do not establish perceptual audio quality.
 
-Additional local Windows validation has covered simultaneous speakers, playback deadlines, packet loss concealment, sequence wraparound, large gaps, disconnect cleanup, Ctrl+C, and immediate server restarts. The temporary integration fixtures used for that validation are not included in this repository.
+Committed tests cover independent Games, routing, forced switches, mutes, ownership/heartbeats, deletion, IPC EOF, reconnects, and restart detection. See [the manual verification checklist](docs/verification.md).
 
 ## Project structure
 
@@ -434,7 +458,9 @@ realtime-voice/
 - **Codec:** Opus encoder and decoder wrappers.
 - **Network:** TCP session management, UDP transport, packet serialization, jitter buffering, and client/server processing.
 - **Common:** debug logging.
-- **Tests:** codec and voice-packet checks.
+- **Tests:** codec/packet checks, protocol validation, group routing, and client mixing/PLC.
+- **docs:** exact remote/local APIs and the GFX lifecycle contract.
+- **tools:** mock management and background-client drivers.
 
 If you want to follow the implementation, start with `client/main.cpp` and `Client::Run()` in `src/Network/client.cpp`. Then look at `ProcessReceivedVoice()` and `ProcessPlayback()` for the receiving audio pipeline.
 
@@ -490,12 +516,12 @@ This first version has a working voice pipeline, but there are several things le
 
 - **No authentication or transport encryption.** Control messages and voice packets are unencrypted.
 - **UDP registration needs stronger session verification.** The first UDP endpoint is associated using a client ID without a secret session token. Endpoint checks after registration do not secure that initial step.
-- **No explicit connection caps or comprehensive rate limits.** Some control queues are unbounded.
+- **No global connection cap or comprehensive rate limits.** Groups allow up to 128 joined players; control queues are bounded.
 - **IPv4 only.**
 - **Fixed audio and jitter settings.** There is no adaptive jitter buffer or automatic bitrate adjustment.
-- **No mute control, push-to-talk, device selector, echo cancellation, or noise suppression.**
-- **No automatic reconnect.** Restart the client after losing its server connection.
-- **No rooms.** Participants connected to a server share the same voice session.
+- **No push-to-talk, device selector, echo cancellation, or noise suppression.** Independent runtime mute controls are available.
+- **No automatic reconnect.** Restart a standalone client, or explicitly reconnect through the background API after approved membership is available.
+- **Trusted management only.** Management roles and supplied player identifiers are unauthenticated. Membership checks enforce routing correctness, not secure identity.
 - **No published capacity or latency benchmarks.**
 
 The server's outgoing traffic increases as more participants join because each incoming voice stream is forwarded separately to the other registered clients.
@@ -535,6 +561,7 @@ This project uses:
 - **miniaudio** for audio capture and playback.
 - **CMake** for building the project.
 - **vcpkg** for Windows dependency management.
+- **nlohmann/json 3.11.3** for JSON. Its header and MIT notice are vendored under `include/third_party/nlohmann`; no additional installation or runtime DLL is required.
 
 The networking protocol, session handling, buffering, and client-side mixing are implemented in this repository.
 
