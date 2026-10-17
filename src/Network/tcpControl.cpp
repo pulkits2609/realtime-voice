@@ -12,7 +12,7 @@ namespace{
     using IsAlive = std::function<bool()>;
     using Tick = std::function<void()>;
 
-    constexpr std::size_t maxFrameSize = 4096;
+    constexpr std::size_t maxFrameSize = MaxControlBytes;
     constexpr std::size_t maxNameSize = 64;
 
     const auto pollInterval = std::chrono::milliseconds(5);
@@ -679,263 +679,159 @@ void TcpControlServer::AcceptLoop(){
     }
 }
 
-void TcpControlServer::HandleClient(
-    std::shared_ptr<
-        boost::asio::ip::tcp::socket
-    > socket
-){
+void TcpControlServer::HandleClient(std::shared_ptr<boost::asio::ip::tcp::socket> socket){
     auto client = std::make_shared<ClientConnection>();
     client->socket = socket;
-
     std::thread writer;
-
-    const IsAlive alive = [this, client](){
-        return running.load() && client->active.load();
-    };
+    bool registered = false;
+    Json hello = Json::object();
+    const IsAlive alive = [this, client](){ return running.load() && client->active.load(); };
 
     try{
         socket->non_blocking(true);
-
-        const auto joinData = ReadControlFrame(
-            *socket,
-            alive
-        );
-
-        if(
-            joinData.size() < 2 ||
-            joinData.size() > 1 + maxNameSize ||
-            joinData[0] != static_cast<std::uint8_t>(
-                ControlMessageType::Join
-            )
-        ){
-            throw std::runtime_error("Invalid Join frame");
+        auto first = ReadControlFrame(*socket, alive);
+        try{ hello = Json::parse(first); }
+        catch(const Json::exception&){
+            throw ProtocolError("incompatible_version", "Use length-prefixed JSON protocol version 2");
         }
-
-        client->clientName.assign(
-            joinData.begin() + 1,
-            joinData.end()
-        );
-
+        ValidateRequest(hello);
         {
             std::lock_guard<std::mutex> lock(clientsMutex);
-
-            // Zero means the uint32 counter has exhausted
-            // its IDs. Do not wrap and reuse an old session ID.
-            if(nextClientId == 0){
-                throw std::runtime_error(
-                    "Client ID space exhausted"
-                );
-            }
-
+            if(nextClientId == 0) throw ProtocolError("ids_exhausted", "Session IDs exhausted");
             client->clientId = nextClientId++;
-
-            // The acknowledgement is always the first
-            // outgoing frame for this connection.
-            client->outgoing.Push(
-                CreateClientMessage(
-                    ControlMessageType::JoinAccepted,
-                    client->clientId
-                )
-            );
-
-            // Existing membership becomes this client's roster.
-            for(const auto& [id, existing] : clients){
-                client->outgoing.Push(
-                    CreateClientMessage(
-                        ControlMessageType::ClientConnected,
-                        id,
-                        existing->clientName
-                    )
-                );
-            }
-
             clients.emplace(client->clientId, client);
-
-            // Register the UDP identity before the writer
-            // can deliver JoinAccepted.
-            if(clientConnectedCallback){
-                clientConnectedCallback(
-                    client->clientId,
-                    client->clientName
-                );
-            }
-
-            const auto connectedMessage = CreateClientMessage(
-                ControlMessageType::ClientConnected,
-                client->clientId,
-                client->clientName
-            );
-
-            // Queue membership changes under the same lock
-            // as registration. This preserves their order.
-            for(const auto& [id, recipient] : clients){
-                if(id != client->clientId){
-                    recipient->outgoing.Push(connectedMessage);
-                }
-            }
-
-            std::cout
-                <<"New Client Connected : "
-                <<client->clientName
-                <<" | ID : "
-                <<client->clientId
-                <<"\n";
         }
+        const auto data = opened(client->clientId, hello);
+        registered = true;
+        // Write hello directly before starting the writer. Events queued during
+        // registration cannot overtake this first response.
+        const auto acknowledgement = Success(hello, data).dump();
+        WriteControlFrame(*socket, {acknowledgement.begin(), acknowledgement.end()}, alive);
 
-        // This is the only thread that writes to this socket.
-        writer = std::thread(
-            [client, alive](){
-                try{
-                    while(alive()){
-                        std::vector<std::uint8_t> payload;
-
-                        if(!client->outgoing.Pop(payload)){
-                            std::this_thread::sleep_for(
-                                pollInterval
-                            );
-                            continue;
-                        }
-
-                        WriteControlFrame(
-                            *client->socket,
-                            payload,
-                            alive
-                        );
+        writer = std::thread([client, alive](){
+            auto nextPing = Clock::now();
+            std::uint32_t nonce = 0;
+            try{
+                while(alive()){
+                    std::vector<std::uint8_t> payload;
+                    if(client->outgoing.Pop(payload)){
+                        WriteControlFrame(*client->socket, payload, alive);
                     }
-                }
-                catch(const std::exception& error){
-                    if(alive()){
-                        std::cerr
-                            <<"TCP send failed for Client "
-                            <<client->clientId
-                            <<": "
-                            <<error.what()
-                            <<"\n";
+                    else if(client->closing){
+                        client->active = false;
+                        break;
                     }
-
-                    client->active = false;
+                    else{
+                        std::this_thread::sleep_for(pollInterval);
+                    }
+                    if(!client->closing && Clock::now() >= nextPing && client->pendingPing == 0){
+                        if(++nonce == 0) ++nonce;
+                        client->pendingPing = nonce;
+                        const auto ping = Event("ping", {{"nonce", nonce}}).dump();
+                        WriteControlFrame(*client->socket, {ping.begin(), ping.end()}, alive);
+                        nextPing = Clock::now() + heartbeatInterval;
+                    }
                 }
             }
-        );
+            catch(const std::exception& error){
+                if(alive()) std::cerr << "TCP send failed: " << error.what() << '\n';
+                client->active = false;
+            }
+        });
 
+        auto lastPong = Clock::now();
+        const Tick heartbeat = [&](){
+            if(Clock::now() - lastPong >= receiveTimeout){
+                throw ProtocolError("heartbeat_timeout", "No valid heartbeat response for ten seconds");
+            }
+        };
         while(alive()){
-            const auto data = ReadControlFrame(
-                *socket,
-                alive
-            );
-
-            if(
-                data.size() != 1 ||
-                data[0] != static_cast<std::uint8_t>(
-                    ControlMessageType::Ping
-                )
-            ){
-                throw std::runtime_error(
-                    "Expected a client heartbeat"
-                );
-            }
-
-            client->outgoing.Push(
-                std::vector<std::uint8_t>{
-                    static_cast<std::uint8_t>(
-                        ControlMessageType::Pong
-                    )
+            Json request = Json::object();
+            try{
+                auto frame = ReadControlFrame(*socket, alive, heartbeat);
+                request = Json::parse(frame);
+                if(request.is_object() && request.value("op", "") == "pong"){
+                    if(request.value("v", 0) != VoiceProtocolVersion ||
+                       Number(request, "nonce") != client->pendingPing.load()){
+                        throw ProtocolError("invalid_heartbeat", "The pong nonce does not match the outstanding ping");
+                    }
+                    client->pendingPing = 0;
+                    lastPong = Clock::now();
+                    continue;
                 }
-            );
+                ValidateRequest(request);
+                if(client->closing) continue;
+                Send(client->clientId, Success(request, requested(client->clientId, request)));
+            }
+            catch(const ProtocolError& error){
+                if(error.code == "heartbeat_timeout") throw;
+                Send(client->clientId, Failure(request, error.code, error.what()));
+            }
+            catch(const Json::exception& error){
+                Send(client->clientId, Failure(request, "invalid_request", error.what()));
+            }
         }
     }
     catch(const std::exception& error){
-        if(alive()){
-            std::cerr
-                <<"TCP session ended for Client "
-                <<client->clientId
-                <<": "
-                <<error.what()
-                <<"\n";
+        if(!writer.joinable() && alive()){
+            try{
+                const auto protocol = dynamic_cast<const ProtocolError*>(&error);
+                const auto failure = Failure(hello, protocol ? protocol->code : "connection_error", error.what()).dump();
+                WriteControlFrame(*socket, {failure.begin(), failure.end()}, alive);
+            }
+            catch(const std::exception&){}
         }
+        if(alive()) std::cerr << "TCP session ended: " << error.what() << '\n';
     }
 
     client->active = false;
     RemoveClient(client);
-
-    if(writer.joinable()){
-        writer.join();
-    }
-
-    // Both socket users have finished before it is closed.
+    // No transport mutex is held while entering routing state.
+    if(registered && removed) removed(client->clientId);
+    if(writer.joinable()) writer.join();
     boost::system::error_code ignored;
     socket->close(ignored);
 }
 
-void TcpControlServer::RemoveClient(
-    const std::shared_ptr<ClientConnection>& client
-){
+void TcpControlServer::RemoveClient(const std::shared_ptr<ClientConnection>& client){
     std::lock_guard<std::mutex> lock(clientsMutex);
-
-    const auto iterator = clients.find(client->clientId);
-
-    if(
-        iterator == clients.end() ||
-        iterator->second != client
-    ){
-        return;
-    }
-
-    clients.erase(iterator);
-
-    if(clientDisconnectedCallback){
-        clientDisconnectedCallback(client->clientId);
-    }
-
-    const auto disconnectedMessage = CreateClientMessage(
-        ControlMessageType::ClientDisconnected,
-        client->clientId
-    );
-
-    for(const auto& [id, recipient] : clients){
-        recipient->outgoing.Push(disconnectedMessage);
-    }
-
-    std::cout
-        <<"Client Disconnected | ID : "
-        <<client->clientId
-        <<"\n";
+    clients.erase(client->clientId);
 }
 
 void TcpControlServer::Stop(){
     running = false;
-
-    if(acceptThread.joinable()){
-        acceptThread.join();
-    }
-
+    if(acceptThread.joinable()) acceptThread.join();
     boost::system::error_code ignored;
     acceptor.close(ignored);
-
-    // All readers/writers observe running == false.
     for(auto& handler : handlers){
-        try{
-            handler.get();
-        }
-        catch(const std::exception& error){
-            std::cerr
-                <<"TCP handler cleanup failed: "
-                <<error.what()
-                <<"\n";
-        }
+        try{ handler.get(); }
+        catch(const std::exception& error){ std::cerr << "TCP cleanup: " << error.what() << '\n'; }
     }
-
     handlers.clear();
 }
 
-void TcpControlServer::SetClientConnectedCallback(
-    ClientConnectedCallback callback
-){
-    clientConnectedCallback = std::move(callback);
+void TcpControlServer::SetHandlers(
+    std::function<Json(std::uint32_t, const Json&)> open,
+    std::function<Json(std::uint32_t, const Json&)> request,
+    std::function<void(std::uint32_t)> remove){
+    opened = std::move(open);
+    requested = std::move(request);
+    removed = std::move(remove);
 }
 
-void TcpControlServer::SetClientDisconnectedCallback(
-    ClientDisconnectedCallback callback
-){
-    clientDisconnectedCallback = std::move(callback);
+void TcpControlServer::Send(std::uint32_t id, const Json& message){
+    const auto text = message.dump();
+    std::lock_guard<std::mutex> lock(clientsMutex);
+    auto found = clients.find(id);
+    if(found == clients.end()) return;
+    if(text.size() > MaxControlBytes ||
+       !found->second->outgoing.TryPush({text.begin(), text.end()})){
+        found->second->active = false;
+    }
+}
+
+void TcpControlServer::Close(std::uint32_t id){
+    std::lock_guard<std::mutex> lock(clientsMutex);
+    auto found = clients.find(id);
+    if(found != clients.end()) found->second->closing = true;
 }

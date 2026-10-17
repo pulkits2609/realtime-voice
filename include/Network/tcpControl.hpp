@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "Network/threadSafeQueue.hpp"
+#include "Network/protocol.hpp"
 
 enum class ControlMessageType : std::uint8_t{
     Join = 1,
@@ -76,84 +77,36 @@ class TcpControlServer{
     private:
         struct ClientConnection{
             std::uint32_t clientId = 0;
-            std::string clientName;
-
-            std::shared_ptr<
-                boost::asio::ip::tcp::socket
-            > socket;
-
-            // Only this connection's writer sends TCP frames.
-            ThreadSafeQueue<
-                std::vector<std::uint8_t>
-            > outgoing{0};
-
-            std::atomic<bool> active{true};
+            std::shared_ptr<boost::asio::ip::tcp::socket> socket;
+            // A slow reader is disconnected; reliable control is never silently dropped.
+            ThreadSafeQueue<std::vector<std::uint8_t>> outgoing{128};
+            std::atomic<bool> active{true}, closing{false};
+            std::atomic<std::uint32_t> pendingPing{0};
         };
 
         boost::asio::io_context& io_context;
         boost::asio::ip::tcp::acceptor acceptor;
-
-        std::map<
-            std::uint32_t,
-            std::shared_ptr<ClientConnection>
-        > clients;
-
+        std::map<std::uint32_t, std::shared_ptr<ClientConnection>> clients;
         std::mutex clientsMutex;
-
         std::thread acceptThread;
         std::vector<std::future<void>> handlers;
-
         std::atomic<bool> running{false};
         std::uint32_t nextClientId = 1;
-
-        std::function<void(
-            std::uint32_t,
-            const std::string&
-        )> clientConnectedCallback;
-
-        std::function<void(
-            std::uint32_t
-        )> clientDisconnectedCallback;
+        std::function<Json(std::uint32_t, const Json&)> opened, requested;
+        std::function<void(std::uint32_t)> removed;
 
         void AcceptLoop();
-
-        void HandleClient(
-            std::shared_ptr<
-                boost::asio::ip::tcp::socket
-            > socket
-        );
-
-        void RemoveClient(
-            const std::shared_ptr<ClientConnection>& client
-        );
+        void HandleClient(std::shared_ptr<boost::asio::ip::tcp::socket> socket);
+        void RemoveClient(const std::shared_ptr<ClientConnection>& client);
 
     public:
-        using ClientConnectedCallback =
-            std::function<void(
-                std::uint32_t,
-                const std::string&
-            )>;
-
-        using ClientDisconnectedCallback =
-            std::function<void(
-                std::uint32_t
-            )>;
-
-        TcpControlServer(
-            boost::asio::io_context& io_context,
-            unsigned short port
-        );
-
+        TcpControlServer(boost::asio::io_context& io_context, unsigned short port);
         ~TcpControlServer();
-
         void Start();
         void Stop();
-
-        void SetClientConnectedCallback(
-            ClientConnectedCallback callback
-        );
-
-        void SetClientDisconnectedCallback(
-            ClientDisconnectedCallback callback
-        );
+        void SetHandlers(std::function<Json(std::uint32_t, const Json&)> open,
+                         std::function<Json(std::uint32_t, const Json&)> request,
+                         std::function<void(std::uint32_t)> remove);
+        void Send(std::uint32_t id, const Json& message);
+        void Close(std::uint32_t id);
 };

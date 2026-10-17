@@ -44,6 +44,8 @@ class ThreadSafeQueue{
         );
 
         std::size_t Size() const;
+        bool TryPush(T value);
+        void Clear();
 };
 
 template<typename T>
@@ -114,4 +116,18 @@ std::size_t ThreadSafeQueue<T>::Size() const{
     );
 
     return queue.size();
+}
+
+template<typename T>
+bool ThreadSafeQueue<T>::TryPush(T value){
+    std::lock_guard<std::mutex> lock(mutex);
+    if(maxSize != 0 && queue.size() >= maxSize) return false;
+    queue.push(std::move(value));
+    return true;
+}
+
+template<typename T>
+void ThreadSafeQueue<T>::Clear(){
+    std::lock_guard<std::mutex> lock(mutex);
+    while(!queue.empty()) queue.pop();
 }

@@ -91,6 +91,7 @@ add_executable(voice_server
     server/main.cpp
 
     src/Network/server.cpp
+    src/Network/voiceGroups.cpp
     src/Network/udpSocket.cpp
     src/Network/packet.cpp
 
