@@ -39,8 +39,10 @@ class ConsoleInput{
                     if(echo) std::cout << character << std::flush;
                 }
                 else{
-                    if(!PeekNamedPipe(handle, nullptr, 0, nullptr, &available, nullptr)) return Closed;
-                    if(!available) return None;
+                    if(GetFileType(handle) != FILE_TYPE_DISK){
+                        if(!PeekNamedPipe(handle, nullptr, 0, nullptr, &available, nullptr)) return Closed;
+                        if(!available) return None;
+                    }
                     if(!ReadFile(handle, &character, 1, &read, nullptr) || !read) return Closed;
                 }
 #else

@@ -16,9 +16,13 @@ namespace{
     }
 }
 
+int RunBackgroundClient();
+
 int main(int argc, char* argv[]){
+    if(argc == 2 && std::string(argv[1]) == "--ipc") return RunBackgroundClient();
     if(argc < 6 || argc > 8){
         std::cerr << "Usage: voice_client <host> <port> <name> <group_id> <channel_id> [team] [--no-audio]\n";
+        std::cerr << "Or: voice_client --ipc\n";
         return 1;
     }
     try{

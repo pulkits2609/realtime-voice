@@ -105,6 +105,7 @@ add_executable(voice_server
 add_executable(voice_client
 
     client/main.cpp
+    client/background.cpp
 
     src/Network/client.cpp
     src/Network/udpSocket.cpp
