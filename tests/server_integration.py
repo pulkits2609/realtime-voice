@@ -192,6 +192,64 @@ class ServerTests(unittest.TestCase):
         result = peer.request("hello", role="manager", v=1)
         self.assertEqual(result["error"]["code"], "incompatible_version")
 
+    def test_standalone_client_manual_game_and_eof(self):
+        self.server.stdin.write("create game 2 standalone\n")
+        self.server.stdin.flush()
+        group = None
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            line = self.lines.get(timeout=5)
+            try:
+                message = json.loads(line)
+                if message.get("ok") and message["data"].get("name") == "standalone":
+                    group = message["data"]
+                    break
+            except ValueError:
+                pass
+        self.assertIsNotNone(group)
+        client = subprocess.Popen([str(BUILD / ("voice_client" + EXE)), "localhost", str(self.port),
+            "standalone", str(group["group_id"]), str(group["all_channel_id"]), "1", "--no-audio"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        events = queue.Queue()
+        reader = threading.Thread(target=lambda: [events.put(line) for line in client.stderr])
+        reader.start()
+        try:
+            deadline = time.monotonic() + 5
+            joined = False
+            while time.monotonic() < deadline:
+                line = events.get(timeout=5)
+                try:
+                    event = json.loads(line)
+                    if event.get("event") == "connected":
+                        self.assertEqual(event["data"]["mutes"], {"microphone": True, "all": True, "team": True})
+                        joined = True
+                        break
+                except ValueError:
+                    pass
+            self.assertTrue(joined)
+            client.stdin.write("mic on\nall on\nteam on\n")
+            client.stdin.flush()
+            deadline = time.monotonic() + 5
+            changed = False
+            while time.monotonic() < deadline:
+                line = events.get(timeout=5)
+                try:
+                    event = json.loads(line)
+                    if event.get("event") == "status" and event["data"]["mutes"] == {"microphone": False, "all": False, "team": False}:
+                        changed = True
+                        break
+                except ValueError:
+                    pass
+            self.assertTrue(changed)
+            client.stdin.close()
+            self.assertEqual(client.wait(timeout=8), 0)
+        finally:
+            if client.poll() is None: client.kill(); client.wait()
+            if not client.stdin.closed: client.stdin.close()
+            reader.join(timeout=5)
+            client.stderr.close()
+            client.stdout.close()
+
 
 if __name__ == "__main__":
     unittest.main()

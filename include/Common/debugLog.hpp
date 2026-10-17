@@ -5,7 +5,7 @@
 
     #define DEBUG_LOG(...) \
         do{ \
-            std::cout << __VA_ARGS__; \
+            std::cerr << __VA_ARGS__; \
         }while(false)
 
 #else

@@ -18,6 +18,7 @@ class OpusEncoderWrapper{
         ::OpusEncoder* encoder = nullptr;
 
         public:
+        bool Reset();
             OpusEncoderWrapper();
             ~OpusEncoderWrapper();
 

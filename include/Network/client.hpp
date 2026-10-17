@@ -23,11 +23,29 @@
 #include <thread>
 
 #include "Network/tcpControl.hpp"
+#include "Network/routedPacket.hpp"
+#include <set>
 
 #include <atomic>
 #include <chrono>
 #include <mutex>
 #include <condition_variable>
+
+struct MuteState{
+    std::atomic<bool> microphone{true}, all{true}, team{true};
+    std::atomic<std::uint64_t> captureGeneration{1};
+
+    Json Snapshot() const{
+        return {{"microphone", microphone.load()}, {"all", all.load()}, {"team", team.load()}};
+    }
+    void Set(const Json& value){
+        const bool mic = Boolean(value, "microphone");
+        const bool incomingAll = Boolean(value, "all");
+        const bool incomingTeam = Boolean(value, "team");
+        if(mic != microphone.load()) captureGeneration++;
+        microphone = mic; all = incomingAll; team = incomingTeam;
+    }
+};
 
 class Client{
     private:
@@ -47,8 +65,33 @@ class Client{
 
         AudioCapture audioCapture;
 
+
+        Json joinInfo, session = Json::object();
+        std::shared_ptr<MuteState> mutes;
+        std::function<void(const Json&)> emit;
+        bool audioEnabled = true, audioStarted = false;
+        std::atomic<bool> finished{false};
+        std::map<std::uint32_t, std::uint32_t> peerRevisions, peerTeams;
+        std::uint64_t serverInstance = 0;
+        std::uint32_t groupId = 0, allChannel = 0, teamChannel = 0;
+        std::uint32_t sendRevision = 0, receiveRevision = 0;
+        std::set<std::string> pendingRequests;
+        ThreadSafeQueue<Json> commands{128};
+        mutable std::mutex statusMutex;
+        Json published = {{"state", "connecting"}};
+        std::atomic<std::uint64_t> decodedFrames{0}, mixedFrames{0};
+
+        struct CapturedBlock{
+            std::uint64_t generation;
+            std::vector<float> samples;
+        };
+        void Publish();
+        void ClearAudio();
+        void StartAudio();
+        void ProcessCommands();
+
         //audio data waiting to process
-        ThreadSafeQueue<std::vector<float>> captureQueue;
+        ThreadSafeQueue<CapturedBlock> captureQueue;
 
         PcmBuffer pcmBuffer;
         
@@ -65,7 +108,7 @@ class Client{
 
         TcpControlClient controlClient;
 
-        std::atomic<bool> running{false};
+        std::atomic<bool> running{true};
         std::thread receiveThread;
 
         std::mutex workMutex;
@@ -95,23 +138,12 @@ class Client{
             }
         };
 
-        struct ControlEvent{
-            ControlMessageType type;
-            std::uint32_t clientId;
-            std::string clientName;
-        };
-
-        std::map<std::uint32_t,
+        std::map<std::uint64_t,
             RemoteClientState
             > remoteClients;
         
-        ThreadSafeQueue<ControlEvent> controlQueue;
+        ThreadSafeQueue<Json> controlQueue;
         
-        void SendMessage(
-            const std::string& message
-        );
-        std::string ReceiveMessage();
-
         void HandleCapture(
             const float* samples,
             std::size_t sampleCount
@@ -139,11 +171,18 @@ class Client{
         Client(
             const std::string& serverAddress,
             unsigned short serverPort,
-            const std::string& clientName
+            const std::string& clientName,
+            Json joinInfo, std::shared_ptr<MuteState> mutes,
+            std::function<void(const Json&)> emit, bool audioEnabled = true
         );
         ~Client();
 
         void Run();
+        void RequestStop();
+        void Post(const Json& request);
+        Json GetStatus() const;
+        bool Done() const { return finished.load(); }
+        friend struct ClientAudioTest;
 
         void ReceiveVoice();
 };

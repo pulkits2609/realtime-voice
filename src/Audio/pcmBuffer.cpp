@@ -1,5 +1,10 @@
 #include "Audio/pcmBuffer.hpp"
 
+void PcmBuffer::Clear(){
+    std::lock_guard<std::mutex> lock(mutex_);
+    samples.clear();
+}
+
 PcmBuffer::PcmBuffer(
     std::size_t maxSamples
 ):

@@ -45,6 +45,7 @@ class PcmBuffer{
         
         //return how many samples are currently buffered, useful in debugging
         std::size_t Size() const;
+        void Clear();
         
         //takes however many samples are currently available
         //up to the requested count

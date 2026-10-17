@@ -57,28 +57,6 @@ namespace{
             static_cast<std::uint32_t>(data[offset + 3]);
     }
 
-    std::vector<std::uint8_t> CreateClientMessage(
-        ControlMessageType type,
-        std::uint32_t clientId,
-        const std::string& name = ""
-    ){
-        std::vector<std::uint8_t> payload;
-
-        payload.push_back(
-            static_cast<std::uint8_t>(type)
-        );
-
-        WriteUint32(payload, clientId);
-
-        payload.insert(
-            payload.end(),
-            name.begin(),
-            name.end()
-        );
-
-        return payload;
-    }
-
     void ReadExact(
         boost::asio::ip::tcp::socket& socket,
         std::uint8_t* output,
@@ -243,11 +221,8 @@ namespace{
 
 // Client implementation
 
-TcpControlClient::TcpControlClient(
-    boost::asio::io_context& io_context
-):
-io_context(io_context),
-socket(io_context){
+TcpControlClient::TcpControlClient(boost::asio::io_context& io_context):
+io_context(io_context), socket(io_context){
 
 }
 
@@ -255,42 +230,10 @@ TcpControlClient::~TcpControlClient(){
     Disconnect();
 }
 
-void TcpControlClient::SendFrame(
-    const std::vector<std::uint8_t>& payload
-){
-    WriteControlFrame(
-        socket,
-        payload,
-        [this](){
-            return running.load();
-        }
-    );
-}
-
-std::vector<std::uint8_t> TcpControlClient::ReceiveFrame(){
-    return ReadControlFrame(
-        socket,
-        [this](){
-            return running.load();
-        }
-    );
-}
-
-bool TcpControlClient::Connect(
-    const std::string& serverAddress,
-    unsigned short serverPort,
-    const std::string& clientName,
-    const std::atomic<bool>& sessionRunning
-){
+Json TcpControlClient::Connect(const std::string& serverAddress, unsigned short serverPort,
+                               const Json& hello, const std::atomic<bool>& sessionRunning){
     Disconnect();
-
     try{
-        if(clientName.empty() || clientName.size() > maxNameSize){
-            throw std::runtime_error(
-                "Client name must contain 1 to 64 bytes"
-            );
-        }
-
         using Tcp = boost::asio::ip::tcp;
 
         Tcp::resolver resolver(io_context);
@@ -368,204 +311,78 @@ bool TcpControlClient::Connect(
         socket.non_blocking(true);
         running = true;
 
-        std::vector<std::uint8_t> joinMessage{
-            static_cast<std::uint8_t>(
-                ControlMessageType::Join
-            )
-        };
-
-        joinMessage.insert(
-            joinMessage.end(),
-            clientName.begin(),
-            clientName.end()
-        );
 
         const IsAlive alive = [this, &sessionRunning](){
             io_context.poll();
-
             return running.load() && sessionRunning.load();
         };
-
-        WriteControlFrame(socket, joinMessage, alive);
-
-        const auto response = ReadControlFrame(socket, alive);
-
-        if(
-            response.size() != 5 ||
-            response[0] != static_cast<std::uint8_t>(
-                ControlMessageType::JoinAccepted
-            )
-        ){
-            throw std::runtime_error(
-                "Expected JoinAccepted as the first server frame"
-            );
+        const auto text = hello.dump();
+        WriteControlFrame(socket, {text.begin(), text.end()}, alive);
+        const auto frame = ReadControlFrame(socket, alive);
+        const auto response = Json::parse(frame);
+        if(response.value("v", 0) != VoiceProtocolVersion){
+            throw ProtocolError("incompatible_version", "The server does not use protocol version 2");
         }
-
-        clientId = ReadUint32(response, 1);
-
-        if(clientId == 0){
-            throw std::runtime_error(
-                "Server assigned an invalid client ID"
-            );
+        if(!response.value("ok", false)){
+            throw ProtocolError(response.at("error").at("code"), response.at("error").at("message"));
         }
-
-        return true;
+        if(response.at("id") != hello.at("id")){
+            throw ProtocolError("invalid_response", "Hello response ID mismatch");
+        }
+        return response.at("data");
     }
-    catch(const std::exception& error){
-        if(sessionRunning){
-            std::cerr
-                <<"TCP connection failed: "
-                <<error.what()
-                <<"\n";
-        }
-
+    catch(...){
         Disconnect();
-        return false;
+        throw;
     }
 }
 
-void TcpControlClient::StartReceive(
-    std::function<void(
-        ControlMessageType,
-        std::uint32_t,
-        const std::string&
-    )> callback
-){
-    if(!running || receiveThread.joinable()){
-        throw std::runtime_error(
-            "TCP receiver cannot be started"
-        );
-    }
-
-    receiveThread = std::thread(
-        [this, callback](){
-            auto nextPing = Clock::now();
-
-            const IsAlive alive = [this](){
-                return running.load();
-            };
-
-            const Tick heartbeat = [this, &nextPing](){
-                if(Clock::now() >= nextPing){
-                    SendFrame(
-                        std::vector<std::uint8_t>{
-                            static_cast<std::uint8_t>(
-                                ControlMessageType::Ping
-                            )
-                        }
-                    );
-
-                    nextPing = Clock::now() + heartbeatInterval;
-                }
-            };
-
-            try{
-                while(running){
-                    const auto data = ReadControlFrame(
-                        socket,
-                        alive,
-                        heartbeat
-                    );
-
-                    const auto type =
-                        static_cast<ControlMessageType>(data[0]);
-
-                    if(type == ControlMessageType::Pong){
-                        if(data.size() != 1){
-                            throw std::runtime_error(
-                                "Invalid Pong frame"
-                            );
-                        }
-
-                        continue;
-                    }
-
-                    if(type == ControlMessageType::ClientConnected){
-                        if(
-                            data.size() < 6 ||
-                            data.size() > 5 + maxNameSize
-                        ){
-                            throw std::runtime_error(
-                                "Invalid ClientConnected frame"
-                            );
-                        }
-
-                        const auto remoteId = ReadUint32(data, 1);
-
-                        if(remoteId == 0){
-                            throw std::runtime_error(
-                                "Invalid remote client ID"
-                            );
-                        }
-
-                        callback(
-                            type,
-                            remoteId,
-                            std::string(
-                                data.begin() + 5,
-                                data.end()
-                            )
-                        );
-                    }
-                    else if(
-                        type == ControlMessageType::ClientDisconnected
-                    ){
-                        if(data.size() != 5){
-                            throw std::runtime_error(
-                                "Invalid ClientDisconnected frame"
-                            );
-                        }
-
-                        const auto remoteId = ReadUint32(data, 1);
-
-                        if(remoteId == 0){
-                            throw std::runtime_error(
-                                "Invalid remote client ID"
-                            );
-                        }
-
-                        callback(type, remoteId, "");
-                    }
-                    else{
-                        throw std::runtime_error(
-                            "Unexpected server control frame"
-                        );
-                    }
-                }
+void TcpControlClient::StartReceive(std::function<void(const Json&)> callback){
+    if(!running || receiveThread.joinable()) throw std::runtime_error("TCP receiver cannot be started");
+    receiveThread = std::thread([this, callback](){
+        const IsAlive alive = [this](){ return running.load(); };
+        const Tick flush = [this, &alive](){
+            Json request;
+            for(unsigned i = 0; i < 32 && outgoing.Pop(request); i++){
+                const auto text = request.dump();
+                WriteControlFrame(socket, {text.begin(), text.end()}, alive);
             }
-            catch(const std::exception& error){
-                if(running.exchange(false)){
-                    std::cerr
-                        <<"TCP control connection lost: "
-                        <<error.what()
-                        <<"\n";
-
-                    callback(
-                        ControlMessageType::ServerDisconnected,
-                        0,
-                        ""
-                    );
+        };
+        try{
+            while(running){
+                const auto frame = ReadControlFrame(socket, alive, flush);
+                const auto message = Json::parse(frame);
+                if(message.value("v", 0) != VoiceProtocolVersion){
+                    throw ProtocolError("incompatible_version", "Unexpected server protocol version");
                 }
+                if(message.value("event", "") == "ping"){
+                    const auto pong = Json{{"v", 2}, {"op", "pong"},
+                                           {"nonce", Number(message.at("data"), "nonce")}}.dump();
+                    WriteControlFrame(socket, {pong.begin(), pong.end()}, alive);
+                }
+                else callback(message);
             }
         }
-    );
+        catch(const std::exception& error){
+            if(running.exchange(false)){
+                callback(Event("server_disconnected", {{"message", error.what()}}));
+            }
+        }
+    });
+}
+
+void TcpControlClient::Post(const Json& request){
+    if(!running || !outgoing.TryPush(request)){
+        throw ProtocolError("control_unavailable", "The control connection is stopped or its queue is full");
+    }
 }
 
 void TcpControlClient::Disconnect(){
     running = false;
-
-    if(receiveThread.joinable()){
-        receiveThread.join();
-    }
-
+    if(receiveThread.joinable()) receiveThread.join();
     boost::system::error_code ignored;
     socket.close(ignored);
-
-    clientId = 0;
-}
-
-std::uint32_t TcpControlClient::GetClientId() const{
-    return clientId;
+    outgoing.Clear();
 }
 
 boost::asio::ip::address TcpControlClient::GetServerAddress() const{

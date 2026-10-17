@@ -110,6 +110,8 @@ void AudioPlayback::DataCallback(
         0.0f
     );
 
+    if(!audioPlayback->enabled) return;
+
     //now copy the decoded samples, JITNA BHI HAI SAB KA SAB !
     audioPlayback->pcmBuffer.PopAvailable(
         outputSamples,

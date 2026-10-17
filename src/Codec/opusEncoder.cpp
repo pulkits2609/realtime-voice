@@ -1,5 +1,9 @@
 #include "Codec/opusEncoder.hpp"
 
+bool OpusEncoderWrapper::Reset(){
+    return encoder != nullptr && opus_encoder_ctl(encoder, OPUS_RESET_STATE) == OPUS_OK;
+}
+
 OpusEncoderWrapper::OpusEncoderWrapper(){
 
 }

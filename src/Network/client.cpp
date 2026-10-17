@@ -10,341 +10,201 @@
 #include <algorithm>
 #include <cmath>
 
-Client::Client(
-    const std::string& serverAddress,
-    unsigned short serverPort,
-    const std::string& clientName
-):
-socket(io_context),
-serverEndpoint(
-    boost::asio::ip::udp::v4(),
-    serverPort
-),
-audioCapture(),
-captureQueue(8),
-pcmBuffer(9600),
-encoder(),
-audioPlayback(),
-networkQueue(8),
-serverAddress(serverAddress),
-clientName(clientName),
-controlClient(io_context),
-controlQueue(0){
+Client::Client(const std::string& serverAddress, unsigned short serverPort,
+               const std::string& clientName, Json joinInfo,
+               std::shared_ptr<MuteState> mutes, std::function<void(const Json&)> emit,
+               bool audioEnabled):
+socket(io_context), serverEndpoint(boost::asio::ip::udp::v4(), serverPort),
+joinInfo(std::move(joinInfo)), mutes(std::move(mutes)), emit(std::move(emit)),
+audioEnabled(audioEnabled), captureQueue(8), pcmBuffer(9600), networkQueue(128),
+serverAddress(serverAddress), clientName(clientName), controlClient(io_context), controlQueue(128){
 
-}
-
-void Client::SendMessage(const std::string& message){
-    // socket.SendTo(message, serverEndpoint);
-    Packet packet(
-        PacketType::Text,
-        message
-    );
-    const std::vector<std::uint8_t> data= packet.Serialize();
-
-    socket.SendTo(
-        data,
-        serverEndpoint
-    );
-}
-
-std::string Client::ReceiveMessage(){
-    // return socket.ReceiveFrom(serverEndpoint);
-
-    const std::vector<std::uint8_t> data = socket.ReceiveFrom(
-        serverEndpoint
-    );
-
-    Packet packet;
-    if(!packet.Deserialize(data)){
-        return "Invalid Packet";
-    }
-
-    return packet.GetTextMessage();
 }
 
 void Client::Run(){
-    running = true;
-
     io_context.restart();
-
-    boost::asio::signal_set signals(
-        io_context,
-        SIGINT,
-        SIGTERM
-    );
-
-    signals.async_wait(
-        [this](const boost::system::error_code& error, int){
-            if(!error){
-                running = false;
-            }
-        }
-    );
-
+    boost::asio::signal_set signals(io_context, SIGINT, SIGTERM);
+    signals.async_wait([this](const boost::system::error_code& error, int){
+        if(!error) RequestStop();
+    });
     try{
-        if(!controlClient.Connect(
-            serverAddress,
-            serverEndpoint.port(),
-            clientName,
-            running
-        )){
-            if(!running){
-                Stop();
-                return;
-            }
-
-            throw std::runtime_error(
-                "Unable to connect to voice server"
-            );
-        }
-
-        serverEndpoint.address(
-            controlClient.GetServerAddress()
-        );
-
-        clientId = controlClient.GetClientId();
-
-        std::cout
-            <<"Connected to server as : "
-            <<clientName
-            <<" | Client ID: "
-            <<clientId
-            <<"\n";
-
-        controlClient.StartReceive(
-            [this](
-                ControlMessageType type,
-                std::uint32_t remoteClientId,
-                const std::string& remoteClientName
-            ){
-                controlQueue.Push(
-                    ControlEvent{
-                        type,
-                        remoteClientId,
-                        remoteClientName
-                    }
-                );
-
-                if(type == ControlMessageType::ServerDisconnected){
-                    running = false;
-                }
-
-                NotifyWork();
-            }
-        );
-
-        if(!encoder.Initialize(48000, 1, 32000)){
-            throw std::runtime_error(
-                "Failed to initialize Opus encoder"
-            );
-        }
-
+        Json hello = joinInfo;
+        hello.update({{"v", 2}, {"id", "__hello"}, {"op", "hello"}, {"role", "voice"},
+                      {"name", clientName}, {"mutes", mutes->Snapshot()}});
+        const auto connected = controlClient.Connect(serverAddress, serverEndpoint.port(), hello, running);
+        clientId = Number(connected, "session_id");
+        serverInstance = std::stoull(Text(connected, "server_instance", 16), nullptr, 16);
+        session = connected;
+        session["state"] = "pending";
+        Publish();
+        emit(Event("session_ready", GetStatus()));
+        serverEndpoint.address(controlClient.GetServerAddress());
+        controlClient.StartReceive([this](const Json& event){
+            if(!controlQueue.TryPush(event)) running = false;
+            NotifyWork();
+        });
         socket.Open();
         socket.Bind(0);
         socket.SetNonBlocking(true);
-
-        if(!audioCapture.Initialize(
-            [this](
-                const float* samples,
-                std::size_t sampleCount
-            ){
-                HandleCapture(samples, sampleCount);
-            }
-        )){
-            throw std::runtime_error(
-                "Failed to initialize microphone"
-            );
+        if(!encoder.Initialize(48000, 1, 32000)){
+            throw ProtocolError("codec_failed", "Failed to initialize Opus encoder");
         }
-
-        if(!audioCapture.Start()){
-            throw std::runtime_error(
-                "Failed to start microphone"
-            );
+        receiveThread = std::thread(&Client::ReceiveVoice, this);
+        if(!connected.at("binding_required").get<bool>()){
+            controlClient.Post({{"v", 2}, {"id", "__join"}, {"op", "join"},
+                {"group_id", Number(joinInfo, "group_id")}, {"channel_id", Number(joinInfo, "channel_id")},
+                {"team", joinInfo.contains("team") ? Number(joinInfo, "team", true) : 0}});
         }
-
-        if(!audioPlayback.Initialize()){
-            throw std::runtime_error(
-                "Failed to initialize audio playback"
-            );
-        }
-
-        if(!audioPlayback.Start()){
-            throw std::runtime_error(
-                "Failed to start audio playback"
-            );
-        }
-
-        io_context.poll();
-
-        if(!running){
-            ProcessControlEvents();
-            Stop();
-            return;
-        }
-
-        receiveThread = std::thread(
-            &Client::ReceiveVoice,
-            this
-        );
 
         std::array<float,FrameSamples> frame{};
         std::array<std::uint8_t,4000> encodedData{};
-
         std::uint32_t sequenceNumber = 0;
-
         auto nextUdpKeepalive = Clock::now();
         auto nextPlayback = nextUdpKeepalive + FrameDuration;
-
         while(running){
             {
-                std::lock_guard<std::mutex> lock(
-                    workMutex
-                );
+                std::lock_guard<std::mutex> lock(workMutex);
                 workPending = false;
             }
-
             io_context.poll();
             ProcessControlEvents();
-
-            if(!running){
-                break;
-            }
-
+            ProcessCommands();
+            if(!running) break;
+            if(groupId && audioEnabled && !audioStarted) StartAudio();
             const auto now = Clock::now();
-
-            if(now >= nextUdpKeepalive){
-                Packet keepalive(
-                    PacketType::Voice,
-                    std::vector<std::uint8_t>{}
-                );
-
+            if(groupId && now >= nextUdpKeepalive){
+                RoutedPacket keepalive(PacketType::Voice, std::vector<std::uint8_t>{});
                 keepalive.SetClientId(clientId);
-
-                socket.SendTo(
-                    keepalive.Serialize(),
-                    serverEndpoint
-                );
-
+                keepalive.SetContext(serverInstance, groupId, session.at("transmit_channel_id"), sendRevision);
+                socket.SendTo(keepalive.Serialize(), serverEndpoint);
                 nextUdpKeepalive = now + std::chrono::seconds(2);
             }
-
             ProcessReceivedVoice();
-
-            if(!running){
-                break;
-            }
-
+            if(!running) break;
             const auto playbackNow = Clock::now();
-
             if(playbackNow >= nextPlayback){
-                const auto skippedFrames =
-                    (playbackNow - nextPlayback) / FrameDuration;
-
+                const auto skippedFrames = (playbackNow - nextPlayback) / FrameDuration;
                 nextPlayback += FrameDuration * (skippedFrames + 1);
-
-                ProcessPlayback(
-                    playbackNow,
-                    static_cast<std::uint64_t>(skippedFrames)
-                );
+                ProcessPlayback(playbackNow, static_cast<std::uint64_t>(skippedFrames));
             }
-
-            std::vector<float> capturedSamples;
-
-            if(captureQueue.Pop(capturedSamples)){
-                pcmBuffer.Push(
-                    capturedSamples.data(),
-                    capturedSamples.size()
-                );
+            CapturedBlock capturedSamples;
+            if(captureQueue.Pop(capturedSamples) &&
+               capturedSamples.generation == mutes->captureGeneration.load() && !mutes->microphone){
+                pcmBuffer.Push(capturedSamples.samples.data(), capturedSamples.samples.size());
             }
-
-            if(pcmBuffer.PopExact(
-                frame.data(),
-                frame.size()
-            )){
-                const int encodedBytes = encoder.Encode(
-                    frame.data(),
-                    static_cast<int>(frame.size()),
-                    encodedData.data(),
-                    static_cast<int>(encodedData.size())
-                );
-
+            if(groupId && !mutes->microphone && !session.at("mutes").at("microphone").get<bool>() &&
+               pcmBuffer.PopExact(frame.data(), frame.size())){
+                const int encodedBytes = encoder.Encode(frame.data(), static_cast<int>(frame.size()),
+                    encodedData.data(), static_cast<int>(encodedData.size()));
                 if(encodedBytes < 0){
-                    std::cerr
-                        <<"Opus encode failed: "
-                        <<opus_strerror(encodedBytes)
-                        <<"\n";
-
+                    std::cerr << "Opus encode failed: " << opus_strerror(encodedBytes) << '\n';
                     continue;
                 }
-
-                const std::vector<std::uint8_t> opusPayload(
-                    encodedData.begin(),
-                    encodedData.begin() + encodedBytes
-                );
-
-                Packet voicePacket(
-                    PacketType::Voice,
-                    opusPayload
-                );
-
+                const std::vector<std::uint8_t> opusPayload(encodedData.begin(), encodedData.begin() + encodedBytes);
+                RoutedPacket voicePacket(PacketType::Voice, opusPayload);
                 voicePacket.SetClientId(clientId);
                 voicePacket.SetSequenceNumber(++sequenceNumber);
-
-                socket.SendTo(
-                    voicePacket.Serialize(),
-                    serverEndpoint
-                );
+                voicePacket.SetContext(serverInstance, groupId, session.at("transmit_channel_id"), sendRevision);
+                if(!mutes->microphone) socket.SendTo(voicePacket.Serialize(), serverEndpoint);
             }
-
-            // Drain queued work without sleeping behind captured audio.
-            if(
-                captureQueue.Size() > 0 ||
-                pcmBuffer.Size() >= FrameSamples ||
-                networkQueue.Size() > 0 ||
-                controlQueue.Size() > 0
-            ){
+            if(captureQueue.Size() > 0 || networkQueue.Size() > 0 || controlQueue.Size() > 0 || commands.Size() > 0){
                 continue;
             }
-
-            std::unique_lock<std::mutex> lock(
-                workMutex
-            );
-
-            workCondition.wait_until(
-                lock,
-                std::min(nextPlayback, nextUdpKeepalive),
-                [this]{
-                    return workPending || !running;
-                }
-            );
+            std::unique_lock<std::mutex> lock(workMutex);
+            workCondition.wait_until(lock, nextPlayback, [this]{ return workPending || !running; });
         }
-
-        // including a final server-disconnect notification
-        // if it causes the processing loop to exit
-        ProcessControlEvents();
-
-        Stop();
     }
-    catch(...){
-        Stop();
-        throw;
+    catch(const ProtocolError& error){
+        if(running) emit(Event("error", {{"code", error.code}, {"message", error.what()}}));
     }
+    catch(const std::exception& error){
+        if(running) emit(Event("error", {{"code", "connection_failed"}, {"message", error.what()}}));
+    }
+    Stop();
+    session["state"] = "disconnected";
+    Publish();
+    emit(Event("disconnected", GetStatus()));
+    finished = true;
 }
 
-void Client::HandleCapture(
-    const float* samples,
-    std::size_t sampleCount
-){
-    std::vector<float> capturedSamples(
-        samples,
-        samples + sampleCount
-    );
+void Client::StartAudio(){
+    if(!audioCapture.Initialize([this](const float* samples, std::size_t count){ HandleCapture(samples, count); }) ||
+       !audioCapture.Start() || !audioPlayback.Initialize() || !audioPlayback.Start()){
+        throw ProtocolError("audio_device_failed", "Failed to initialize/start default microphone or playback device");
+    }
+    audioStarted = true;
+    Publish();
+}
 
-    captureQueue.Push(
-        std::move(capturedSamples)
-    );
-
+void Client::HandleCapture(const float* samples, std::size_t sampleCount){
+    const auto generation = mutes->captureGeneration.load();
+    if(mutes->microphone) return;
+    captureQueue.Push(CapturedBlock{generation, std::vector<float>(samples, samples + sampleCount)});
     NotifyWork();
+}
+
+void Client::RequestStop(){
+    running = false;
+    audioPlayback.SetEnabled(false);
+    NotifyWork();
+}
+
+void Client::Post(const Json& request){
+    if(request.at("op") == "set_mutes"){
+        mutes->Set({{"microphone", Boolean(request, "microphone")},
+                    {"all", Boolean(request, "all")}, {"team", Boolean(request, "team")}});
+        audioPlayback.SetEnabled(false);
+    }
+    if(!running || !commands.TryPush(request)){
+        throw ProtocolError("not_connected", "Voice is disconnected or its command queue is full");
+    }
+    NotifyWork();
+}
+
+void Client::Publish(){
+    Json status = session;
+    status["mutes"] = mutes->Snapshot();
+    status["audio_enabled"] = audioEnabled;
+    status["audio_initialized"] = audioStarted;
+    status["decoded_frames"] = decodedFrames.load();
+    status["mixed_frames"] = mixedFrames.load();
+    std::lock_guard<std::mutex> lock(statusMutex);
+    published = std::move(status);
+}
+
+Json Client::GetStatus() const{
+    std::lock_guard<std::mutex> lock(statusMutex);
+    Json status = published;
+    status["mutes"] = mutes->Snapshot();
+    status["decoded_frames"] = decodedFrames.load();
+    status["mixed_frames"] = mixedFrames.load();
+    return status;
+}
+
+void Client::ClearAudio(){
+    captureQueue.Clear();
+    pcmBuffer.Clear();
+    networkQueue.Clear();
+    audioPlayback.Clear();
+    remoteClients.clear();
+}
+
+void Client::ProcessCommands(){
+    Json request;
+    while(commands.Pop(request)){
+        if(request.at("op") == "set_mutes" && groupId == 0){
+            emit(Success(request, {{"mutes", mutes->Snapshot()}, {"applied", false}}));
+            emit(Event("mute_changed", mutes->Snapshot()));
+            continue;
+        }
+        try{
+            controlClient.Post(request);
+            pendingRequests.insert(Text(request, "id"));
+        }
+        catch(const ProtocolError& error){
+            emit(Failure(request, error.code, error.what()));
+        }
+    }
 }
 
 void Client::ReceiveVoice(){
@@ -427,7 +287,7 @@ void Client::ProcessReceivedVoice(){
             return;
         }
 
-        Packet packet;
+        RoutedPacket packet;
 
         if(!packet.Deserialize(data)){
 
@@ -471,12 +331,26 @@ void Client::ProcessReceivedVoice(){
             continue;
         }
 
+        if(packet.GetInstance() != serverInstance || packet.GetGroupId() != groupId ||
+           packet.GetReceiveRevision() != receiveRevision ||
+           packet.GetSendRevision() != peerRevisions.at(senderClientId)) continue;
+        const auto channel = packet.GetChannelId();
+        if(channel == allChannel){
+            if(mutes->all || session.at("mutes").at("all").get<bool>()) continue;
+        }
+        else if(channel == teamChannel && teamChannel != 0){
+            if(mutes->team || session.at("mutes").at("team").get<bool>() ||
+               peerTeams.at(senderClientId) != session.at("team")) continue;
+        }
+        else continue;
+        const auto streamId = (static_cast<std::uint64_t>(senderClientId) << 32) | channel;
+
         //get this remote client's audio state
         auto [
             remoteClientIterator,
             inserted
         ] = remoteClients.try_emplace(
-            senderClientId
+            streamId
         );
 
         RemoteClientState& remoteClient =
@@ -569,54 +443,83 @@ Client::~Client(){
 }
 
 void Client::ProcessControlEvents(){
-    ControlEvent event;
-
-    while(controlQueue.Pop(event)){
-        if(event.type == ControlMessageType::ServerDisconnected){
-            running = false;
-
-            activeClients.clear();
-            remoteClients.clear();
-
-            std::cout
-                <<"Server disconnected; voice session ended\n";
-
-            return;
-        }
-
-        if(event.clientId == 0 || event.clientId == clientId){
-            continue;
-        }
-
-        if(event.type == ControlMessageType::ClientConnected){
-            const auto [iterator, inserted] =
-                activeClients.emplace(
-                    event.clientId,
-                    event.clientName
-                );
-
-            if(inserted){
-                std::cout
-                    <<"Remote Client Added : "
-                    <<event.clientName
-                    <<" | ID : "
-                    <<event.clientId
-                    <<"\n";
+    Json message;
+    while(controlQueue.Pop(message)){
+        if(message.contains("event")){
+            const auto event = Text(message, "event");
+            if(event == "state"){
+                const auto& state = message.at("data");
+                const auto nextGroup = Number(state, "group_id", true);
+                const auto nextSend = Number(state, "send_revision");
+                const auto nextReceive = Number(state, "receive_revision");
+                const bool joined = groupId == 0 && nextGroup != 0;
+                const auto oldTransmit = session.value("transmit_channel_id", 0u);
+                if(nextGroup != groupId || nextReceive != receiveRevision){
+                    ClearAudio();
+                }
+                if(nextSend != sendRevision){
+                    mutes->captureGeneration++;
+                    captureQueue.Clear();
+                    pcmBuffer.Clear();
+                    encoder.Reset();
+                }
+                std::map<std::uint32_t, std::uint32_t> revisions, teams;
+                activeClients.clear();
+                for(const auto& peer : state.at("peers")){
+                    const auto id = Number(peer, "session_id");
+                    activeClients[id] = Text(peer, "name");
+                    revisions[id] = Number(peer, "send_revision");
+                    teams[id] = Number(peer, "team", true);
+                }
+                for(auto iterator = remoteClients.begin(); iterator != remoteClients.end();){
+                    const auto id = static_cast<std::uint32_t>(iterator->first >> 32);
+                    if(!revisions.count(id) || !peerRevisions.count(id) ||
+                       revisions[id] != peerRevisions[id]){
+                        iterator = remoteClients.erase(iterator);
+                        audioPlayback.Clear();
+                    }
+                    else ++iterator;
+                }
+                peerRevisions = std::move(revisions);
+                peerTeams = std::move(teams);
+                session = state;
+                groupId = nextGroup; sendRevision = nextSend; receiveRevision = nextReceive;
+                allChannel = Number(state, "all_channel_id");
+                teamChannel = state.at("team_channel_id").is_null() ? 0 : Number(state, "team_channel_id");
+                if(joined){
+                    if(audioEnabled) StartAudio();
+                    if(state.at("mutes") != mutes->Snapshot()){
+                        auto sync = mutes->Snapshot();
+                        sync.update({{"v", 2}, {"id", "__sync"}, {"op", "set_mutes"}});
+                        controlClient.Post(sync);
+                    }
+                }
+                Publish();
+                if(joined) emit(Event("connected", GetStatus()));
+                if(oldTransmit != session.at("transmit_channel_id")){
+                    emit(Event("transmit_changed", GetStatus()));
+                }
+                emit(Event("status", GetStatus()));
+            }
+            else if(event == "group_deleted" || event == "membership_removed" || event == "server_disconnected"){
+                ClearAudio();
+                groupId = 0;
+                emit(message);
+                RequestStop();
             }
         }
-        else if(
-            event.type == ControlMessageType::ClientDisconnected
-        ){
-            const bool wasActive =
-                activeClients.erase(event.clientId) > 0;
-
-            remoteClients.erase(event.clientId);
-
-            if(wasActive){
-                std::cout
-                    <<"Remote Client Disconnected : "
-                    <<event.clientId
-                    <<"\n";
+        else{
+            const auto id = Text(message, "id");
+            if(id.rfind("__", 0) == 0){
+                if(!message.value("ok", false)){
+                    throw ProtocolError(message.at("error").at("code"), message.at("error").at("message"));
+                }
+                continue;
+            }
+            pendingRequests.erase(id);
+            emit(message);
+            if(message.value("ok", false) && message.at("data").contains("mutes")){
+                emit(Event("mute_changed", mutes->Snapshot()));
             }
         }
     }
@@ -628,6 +531,7 @@ void Client::Stop(){
     // Stop capture callbacks while their queues still exist.
     audioCapture.Stop();
     audioPlayback.Stop();
+    audioStarted = false;
 
     controlClient.Disconnect();
 
@@ -638,8 +542,20 @@ void Client::Stop(){
     // The UDP receiver has finished before socket closure.
     socket.Close();
 
+    ClearAudio();
+    for(const auto& id : pendingRequests){
+        emit(Failure(Json{{"id", id}}, "disconnected", "Voice disconnected before the response arrived"));
+    }
+    pendingRequests.clear();
+    Json request;
+    while(commands.Pop(request)) emit(Failure(request, "disconnected", "Voice disconnected"));
     activeClients.clear();
     remoteClients.clear();
+    groupId = 0;
+    session["group_id"] = 0;
+    session["transmit_channel_id"] = nullptr;
+    session["receive_channels"] = Json::array();
+    session["peers"] = Json::array();
 }
 
 void Client::RebufferRemoteClient(
@@ -681,6 +597,8 @@ void Client::ProcessPlayback(
     bool hasAudio = false;
 
     for(auto& [senderClientId, remoteClient] : remoteClients){
+        const auto channel = static_cast<std::uint32_t>(senderClientId);
+        if((channel == allChannel && mutes->all) || (channel == teamChannel && mutes->team)) continue;
         if(
             !remoteClient.receivedFirstPacket ||
             now < remoteClient.playbackStart
@@ -758,6 +676,7 @@ void Client::ProcessPlayback(
             else{
                 remoteClient.consecutiveLosses = 0;
                 remoteClient.frameNumber++;
+                decodedFrames++;
 
                 DEBUG_LOG(
                     "Received Voice Packet : Client "
@@ -834,6 +753,11 @@ void Client::ProcessPlayback(
     }
 
     // One mixed frame per deadline, regardless of the speaker count.
+    const bool enabled = session.contains("mutes") &&
+        session["mutes"]["all"] == mutes->all.load() &&
+        session["mutes"]["team"] == mutes->team.load();
+    audioPlayback.SetEnabled(enabled);
+    mixedFrames++;
     audioPlayback.Push(
         mixedFrame.data(),
         mixedFrame.size()

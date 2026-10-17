@@ -16,60 +16,22 @@
 #include "Network/threadSafeQueue.hpp"
 #include "Network/protocol.hpp"
 
-enum class ControlMessageType : std::uint8_t{
-    Join = 1,
-    JoinAccepted = 2,
-    ClientConnected = 3,
-    ClientDisconnected = 4,
-
-    Ping = 5,
-    Pong = 6,
-
-    // Local notification; never sent over TCP.
-    ServerDisconnected = 7
-};
-
 class TcpControlClient{
     private:
         boost::asio::io_context& io_context;
         boost::asio::ip::tcp::socket socket;
-
-        std::uint32_t clientId = 0;
-
         std::atomic<bool> running{false};
         std::thread receiveThread;
-
-        void SendFrame(
-            const std::vector<std::uint8_t>& payload
-        );
-
-        std::vector<std::uint8_t> ReceiveFrame();
+        ThreadSafeQueue<Json> outgoing{128};
 
     public:
-        explicit TcpControlClient(
-            boost::asio::io_context& io_context
-        );
-
+        explicit TcpControlClient(boost::asio::io_context& io_context);
         ~TcpControlClient();
-
-        bool Connect(
-            const std::string& serverAddress,
-            unsigned short serverPort,
-            const std::string& clientName,
-            const std::atomic<bool>& sessionRunning
-        );
-
-        void StartReceive(
-            std::function<void(
-                ControlMessageType,
-                std::uint32_t,
-                const std::string&
-            )> callback
-        );
-
+        Json Connect(const std::string& serverAddress, unsigned short port,
+                     const Json& hello, const std::atomic<bool>& sessionRunning);
+        void StartReceive(std::function<void(const Json&)> callback);
+        void Post(const Json& request);
         void Disconnect();
-
-        std::uint32_t GetClientId() const;
         boost::asio::ip::address GetServerAddress() const;
 };
 

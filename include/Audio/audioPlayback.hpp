@@ -1,11 +1,13 @@
 #pragma once
 
 #include <cstddef>
+#include <atomic>
 #include <third_party/miniaudio.h>
 
 #include <Audio/pcmBuffer.hpp>
 
 class AudioPlayback{
+    friend struct ClientAudioTest;
     private:
         static void DataCallback(
             ma_device* device,
@@ -18,6 +20,7 @@ class AudioPlayback{
         PcmBuffer pcmBuffer;
 
         bool initialized = false;
+        std::atomic<bool> enabled{true};
         bool started = false; //same as audiocapture
         
     public:
@@ -27,6 +30,8 @@ class AudioPlayback{
         bool Initialize();
         bool Start();
         void Stop();
+        void Clear(){ pcmBuffer.Clear(); }
+        void SetEnabled(bool value){ enabled = value; if(!value) Clear(); }
 
         void Push(
             const float* samples,
