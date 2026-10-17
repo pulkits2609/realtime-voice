@@ -13,14 +13,17 @@ int RunBackgroundClient(){
     auto mutes = std::make_shared<MuteState>();
     std::unique_ptr<Client> client;
     std::thread worker;
+    std::uint64_t connectionId = 0;
     const auto disconnect = [&](){
         if(client) client->RequestStop();
         if(worker.joinable()) worker.join();
         client.reset();
     };
     const auto status = [&](){
-        return client ? client->GetStatus() : Json{{"state", "disconnected"}, {"group_id", 0},
+        Json current = client ? client->GetStatus() : Json{{"state", "disconnected"}, {"group_id", 0},
             {"transmit_channel_id", nullptr}, {"receive_channels", Json::array()}, {"mutes", mutes->Snapshot()}};
+        current["connection_id"] = connectionId;
+        return current;
     };
     bool stopping = false;
     boost::asio::io_context signalsContext;
@@ -79,13 +82,15 @@ int RunBackgroundClient(){
                                      {"team", request.contains("team") ? Number(request, "team", true) : 0}};
                         const bool audio = request.contains("audio") ? Boolean(request, "audio") : true;
                         disconnect();
+                        const auto connectingId = ++connectionId;
                         client = std::make_unique<Client>(host, static_cast<unsigned short>(port), name, join, mutes,
-                            [&, id](Json message){
+                            [&, id, connectingId](Json message){
+                                if(message.contains("event")) message["data"]["connection_id"] = connectingId;
                                 if(message.value("event", "") == "error") message["data"]["request_id"] = id;
                                 publish(message);
                             }, audio);
                         worker = std::thread([&](){ client->Run(); });
-                        publish(Success(request, {{"accepted", true}, {"state", "connecting"}}));
+                        publish(Success(request, {{"accepted", true}, {"state", "connecting"}, {"connection_id", connectingId}}));
                     }
                     else if(op == "set_transmit"){
                         Number(request, "channel_id");

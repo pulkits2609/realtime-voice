@@ -57,6 +57,7 @@ class BackgroundTests(unittest.TestCase):
         child.event("status", lambda state: state["phase"] == "waiting")
         self.assertEqual(child.request("set_transmit", channel_id=group["team_channel_ids"][1])["error"]["code"], "team_disabled")
         child.ok("disconnect")
+        child.event("disconnected", lambda state: state["session_id"] == joined["session_id"])
         self.assertEqual(child.ok("get_status")["mutes"], {"microphone": False, "all": False, "team": False})
         deadline = time.monotonic() + 3
         while self.manager.ok("group_details", group_id=group["group_id"])["connected_players"]:
@@ -67,7 +68,7 @@ class BackgroundTests(unittest.TestCase):
         self.assertEqual(second["mutes"], {"microphone": False, "all": False, "team": False})
         self.manager.ok("delete_group", group_id=group["group_id"])
         child.event("group_deleted")
-        child.event("disconnected")
+        child.event("disconnected", lambda state: state["session_id"] == second["session_id"])
         self.assertEqual(child.ok("get_status")["state"], "disconnected")
         self.assertEqual(child.request("create_group", type="game", teams=2)["error"]["code"], "unknown_operation")
         child.ok("shutdown")

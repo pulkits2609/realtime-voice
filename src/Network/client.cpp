@@ -504,8 +504,14 @@ void Client::ProcessControlEvents(){
             else if(event == "group_deleted" || event == "membership_removed" || event == "server_disconnected"){
                 ClearAudio();
                 groupId = 0;
-                emit(message);
                 RequestStop();
+                session["state"] = "disconnected";
+                session["group_id"] = 0;
+                session["transmit_channel_id"] = nullptr;
+                session["receive_channels"] = Json::array();
+                Publish();
+                emit(message);
+                return;
             }
         }
         else{
