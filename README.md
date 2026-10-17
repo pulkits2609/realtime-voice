@@ -263,6 +263,15 @@ For a manual Game, use `create game 2` (or 3/4), and supply the client's team af
 
 Other server commands: `list`, `show <group_id>`, `delete <group_id>`, and `shutdown`.
 
+Both terminal applications now show numbered menus. Enter `help` or `menu` to
+show the menu again, and `back` to cancel a guided action. The server menu walks
+through group creation, details, phases, team assignments, and deletion. Existing
+commands remain available as shortcuts.
+
+JSON displayed in an interactive terminal uses two-space indentation. Redirected
+or piped process output keeps its existing format; `voice_client --ipc` always
+uses one compact JSON object per line for other applications.
+
 ### Windows
 
 Server:
@@ -318,6 +327,13 @@ Names can contain spaces if quoted:
 Use a name between 1 and 64 bytes. Names are display labels; they are not authentication credentials.
 
 In the client terminal: `mic on` opens the microphone, `all on` listens to All/Lobby, and `team on` listens to Team. `off` mutes the named control. All three start muted. `tx <channel_id>` changes the transmit destination; `status` shows routing and mutes.
+
+Client menu options 1/2/3 toggle microphone, incoming All, and incoming Team.
+Option 4 shows the available transmit channel IDs and asks for `all`, `team`, or
+an ID. `tx all` and `tx team` are shortcuts. Option 5 shows full status, including
+receive routes. Option 0 disconnects and exits. `menu` refreshes the displayed mute
+states after changes. Team transmission still requires a Game in playing phase;
+Lobby groups have no Team route.
 
 Transmitting to All still permits receiving your own Team. Team transmission is disabled while waiting. Lobby has only its shared All-like route.
 

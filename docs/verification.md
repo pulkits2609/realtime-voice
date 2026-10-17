@@ -92,6 +92,18 @@ intermittent Windows startup failure or replace hardware/real-network testing.
 
 ## Hardware listening checklist
 
+The server integration suite also checks numbered menu creation, invalid input,
+team/phase actions, details, cancellation, and deletion using piped input. In a
+real terminal, check the numbered client mute toggles, transmit prompt, back/help,
+two-space JSON formatting, and Ctrl+C while typing a partial command. Piped
+readiness and background IPC must remain single-line JSON.
+
+The menu update passed all seven suites on Windows Release and Ubuntu 22.04.
+An Ubuntu pseudo-terminal flow also checked pretty readiness/responses/events,
+client mute toggles, waiting-Team rejection, forced Team selection, tx all, back,
+and Ctrl+C with partial input. Native Windows terminal key handling remains a
+manual check; device-free terminal tests do not assess speech quality.
+
 Use separate computers and headphones. Avoid multiple live microphones feeding
 the same room's speakers.
 

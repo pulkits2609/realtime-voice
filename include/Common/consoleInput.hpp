@@ -19,12 +19,14 @@ class ConsoleInput{
     public:
         enum Result { None, Line, Closed, TooLong };
         explicit ConsoleInput(bool echo = true):echo(echo){}
-        static bool IsTerminal(){
+        // Standard descriptors: 0 input, 1 output, 2 diagnostics.
+        static bool IsTerminal(int descriptor = 0){
 #ifdef _WIN32
             DWORD mode = 0;
-            return GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &mode) != 0;
+            const DWORD handle = descriptor == 0 ? STD_INPUT_HANDLE : descriptor == 1 ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE;
+            return GetConsoleMode(GetStdHandle(handle), &mode) != 0;
 #else
-            return isatty(STDIN_FILENO) != 0;
+            return isatty(descriptor) != 0;
 #endif
         }
         Result Poll(std::string& line){

@@ -13,6 +13,10 @@ Connect its stdin, stdout, and stderr to separate pipes. Do not merge stderr int
 stdout. No interactive prompts are used. The child owns its TCP/UDP connections,
 audio devices, Opus encoder/decoders, jitter buffers, and mixing.
 
+The standalone client's numbered menus and pretty-printed terminal JSON do not
+apply to --ipc. IPC output remains one compact JSON object per line, even if
+launched from a terminal.
+
 For the remote manager API, see [server API](server-api.md).
 For complete lifecycle examples, see [GFX integration](gfx-integration.md).
 

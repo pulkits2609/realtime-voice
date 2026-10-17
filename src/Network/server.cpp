@@ -48,7 +48,7 @@ void Server::Run(){
         controlServer.Start();
         // Flush only after UDP is bound and TCP is listening/accepting.
         std::cout << Event("server_ready", {{"port", port}, {"tcp", true}, {"udp", true}})
-            .dump(ConsoleInput::IsTerminal() ? 2 : -1) << std::endl;
+            .dump(ConsoleInput::IsTerminal(1) ? 2 : -1) << std::endl;
         console = std::thread(&Server::ConsoleLoop, this);
         while(running){
             io_context.poll();
@@ -81,12 +81,55 @@ void Server::Run(){
 
 void Server::ConsoleLoop(){
     ConsoleInput input;
-    std::string line, pendingType;
-    int step = 0;
-    std::cout << "Commands: create | create game <2-4> [name] | create lobby [name]\n"
-              << "list [after_id] | show <group> | delete <group> | phase <group> waiting|playing\n"
-              << "team <group> <session> <team> | shutdown\n";
+    const bool interactive = ConsoleInput::IsTerminal() && ConsoleInput::IsTerminal(1);
+    enum class Step { Command, GroupType, TeamCount, Name, GroupId, Phase, SessionId, TeamId };
+    Step step = Step::Command;
+    std::string line, pending;
+    bool needsPrompt = true;
+    const auto menu = [](){
+        std::cout << "\n==================================================\n"
+                  << "  realtime-voice | Server\n"
+                  << "==================================================\n"
+                  << "  1  Create a group\n"
+                  << "  2  List groups\n"
+                  << "  3  Show group details and participants\n"
+                  << "  4  Change Game phase (waiting / playing)\n"
+                  << "  5  Assign a player's team\n"
+                  << "  6  Delete a group and all its channels\n"
+                  << "  0  Shut down the server\n\n"
+                  << "Type a number or command. help/menu shows this menu.\n"
+                  << "Use back to cancel a guided action. IDs come from list.\n"
+                  << "Shortcuts: create game <2-4> [name] | create lobby [name]\n"
+                  << "list [after_id] | show <group> | delete <group>\n"
+                  << "phase <group> waiting|playing | team <group> <session> <team>\n";
+    };
+    const auto ask = [&](){
+        if(!interactive) return;
+        switch(step){
+            case Step::Command: std::cout << "\nserver> "; break;
+            case Step::GroupType: std::cout << "Group type [1 Game / 2 Lobby]: "; break;
+            case Step::TeamCount: std::cout << "Number of teams [2-4]: "; break;
+            case Step::Name: std::cout << "Group name [Enter for default]: "; break;
+            case Step::GroupId: std::cout << "Group ID: "; break;
+            case Step::Phase: std::cout << "Phase [1 waiting / 2 playing]: "; break;
+            case Step::SessionId: std::cout << "Player session ID (from group details): "; break;
+            case Step::TeamId: std::cout << "Assigned team number [1-4, within this Game]: "; break;
+        }
+        std::cout << std::flush;
+    };
+    const auto validId = [](const std::string& value){
+        std::uint64_t number = 0;
+        if(value.empty()) return false;
+        for(char digit : value){
+            if(digit < '0' || digit > '9') return false;
+            number = number * 10 + (digit - '0');
+            if(number > UINT32_MAX) return false;
+        }
+        return number > 0;
+    };
+    menu();
     while(running){
+        if(needsPrompt){ ask(); needsPrompt = false; }
         const auto result = input.Poll(line);
         if(result == ConsoleInput::Closed) return; // Headless service continues after terminal EOF.
         if(result == ConsoleInput::None){
@@ -94,25 +137,67 @@ void Server::ConsoleLoop(){
             continue;
         }
         if(result == ConsoleInput::TooLong){
-            std::cerr << "Command exceeds 8192 bytes\n"; continue;
+            std::cerr << "Command exceeds 8192 bytes. Try a shorter command.\n";
+            needsPrompt = true; continue;
         }
+        needsPrompt = true;
+        const auto first = line.find_first_not_of(" \t");
+        line = first == std::string::npos ? "" : line.substr(first, line.find_last_not_of(" \t") - first + 1);
         try{
-            if(step == 1){
-                if(line != "game" && line != "lobby") throw std::runtime_error("Choose game or lobby");
-                pendingType = line;
-                if(line == "game"){ step = 2; std::cout << "Teams (2-4): " << std::flush; continue; }
-                line = "create lobby"; step = 0;
+            if(line == "menu" || line == "help" || line == "?" || line == "back" || line == "cancel"){
+                step = Step::Command; pending.clear(); menu(); continue;
             }
-            else if(step == 2){ line = "create game " + line; step = 0; }
+            if(step == Step::GroupType){
+                if(line == "1") line = "game";
+                if(line == "2") line = "lobby";
+                if(line != "game" && line != "lobby") throw std::runtime_error("Choose 1/game or 2/lobby, or type back");
+                pending = "create " + line;
+                step = line == "game" ? Step::TeamCount : Step::Name;
+                continue;
+            }
+            if(step == Step::TeamCount){
+                if(line != "2" && line != "3" && line != "4") throw std::runtime_error("A Game needs 2, 3, or 4 teams");
+                pending += " " + line; step = Step::Name; continue;
+            }
+            if(step == Step::Name){
+                if(!line.empty()) pending += " " + line;
+                line = pending; step = Step::Command;
+            }
+            else if(step == Step::GroupId || step == Step::SessionId || step == Step::TeamId){
+                if(!validId(line)) throw std::runtime_error("Enter a positive numeric ID, or type back");
+                pending += " " + line;
+                if(step == Step::GroupId && pending.rfind("phase ", 0) == 0){ step = Step::Phase; continue; }
+                if(step == Step::GroupId && pending.rfind("team ", 0) == 0){ step = Step::SessionId; continue; }
+                if(step == Step::SessionId){ step = Step::TeamId; continue; }
+                line = pending; step = Step::Command;
+            }
+            else if(step == Step::Phase){
+                if(line == "1") line = "waiting";
+                if(line == "2") line = "playing";
+                if(line != "waiting" && line != "playing") throw std::runtime_error("Choose 1/waiting or 2/playing");
+                line = pending + " " + line; step = Step::Command;
+            }
+            if(line == "1") line = "create";
+            else if(line == "2") line = "list";
+            else if(line == "3") line = "show";
+            else if(line == "4") line = "phase";
+            else if(line == "5") line = "team";
+            else if(line == "6") line = "delete";
+            else if(line == "0") line = "shutdown";
+            if(line == "show" || line == "phase" || line == "team" || line == "delete" || line == "stop"){
+                pending = line; step = Step::GroupId; continue;
+            }
             std::istringstream words(line);
             std::string command;
             words >> command;
             if(command.empty()) continue;
-            if(command == "shutdown" || command == "quit"){ running = false; break; }
+            if(command == "shutdown" || command == "quit"){
+                std::cout << "Shutting down voice server...\n"; running = false; break;
+            }
             Json request = {{"v", 2}, {"id", "operator"}};
             if(command == "create"){
                 std::string type;
-                if(!(words >> type)){ step = 1; std::cout << "Type (game/lobby): " << std::flush; continue; }
+                if(!(words >> type)){ step = Step::GroupType; continue; }
                 request.update({{"op", "create_group"}, {"type", type}});
                 if(type == "game"){
                     int teams = 0;
@@ -129,6 +214,9 @@ void Server::ConsoleLoop(){
                 if(words >> after) request["after_id"] = after;
             }
             else{
+                if(command != "show" && command != "delete" && command != "stop" && command != "phase" && command != "team"){
+                    throw std::runtime_error("Unknown command. Type help to see the menu");
+                }
                 unsigned group = 0;
                 if(!(words >> group)) throw std::runtime_error("A group ID is required");
                 request["group_id"] = group;
@@ -145,10 +233,15 @@ void Server::ConsoleLoop(){
                 }
                 else throw std::runtime_error("Unknown server command");
             }
-            std::cout << Success(request, groups.Operator(request)).dump(ConsoleInput::IsTerminal() ? 2 : -1) << '\n' << std::flush;
+            const auto data = groups.Operator(request);
+            if(interactive){
+                std::cout << "\n--- " << command << " completed ---\n";
+                if(data.contains("total_groups")) std::cout << "Total groups: " << data["total_groups"] << '\n';
+                if(data.contains("connected_players")) std::cout << "Connected players: " << data["connected_players"] << '\n';
+            }
+            std::cout << Success(request, data).dump(ConsoleInput::IsTerminal(1) ? 2 : -1) << '\n' << std::flush;
         }
         catch(const std::exception& error){
-            step = 0;
             std::cerr << "Operator error: " << error.what() << '\n';
         }
     }

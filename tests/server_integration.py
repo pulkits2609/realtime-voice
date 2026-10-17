@@ -246,6 +246,42 @@ class ServerTests(unittest.TestCase):
         result = peer.request("hello", role="manager", v=1)
         self.assertEqual(result["error"]["code"], "incompatible_version")
 
+    def test_server_menu_actions_and_cancellation(self):
+        def action(commands):
+            self.server.stdin.write(commands)
+            self.server.stdin.flush()
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                line = self.lines.get(timeout=max(.01, deadline - time.monotonic()))
+                try: result = json.loads(line)
+                except ValueError: continue
+                if result.get("ok"): return result["data"]
+            self.fail("Menu action returned no response")
+        # Invalid team input stays at the prompt; the next valid input succeeds.
+        game = action("help\n1\n1\n1\n2\nMenu Game\n")
+        self.assertEqual(game["name"], "Menu Game")
+        self.assertEqual(len(game["team_channel_ids"]), 2)
+        phase = action(f"4\n{game['group_id']}\n2\n")
+        self.assertEqual(phase["phase"], "playing")
+        player = self.peer()
+        hello = player.ok("hello", role="voice", name="menu-player",
+            group_id=game["group_id"], channel_id=game["all_channel_id"])
+        player.ok("join", group_id=game["group_id"], channel_id=game["all_channel_id"], team=1)
+        changed = action(f"5\n{game['group_id']}\n{hello['session_id']}\n2\n")
+        self.assertEqual(changed["session_id"], hello["session_id"])
+        self.assertEqual(player.ok("status")["team"], 2)
+        details = action(f"3\n{game['group_id']}\n")
+        self.assertEqual(details["connected_players"], 1)
+        # Cancelling delete must not mutate the group or consume the next command.
+        listing = action("6\nback\n2\n")
+        self.assertTrue(any(g["group_id"] == game["group_id"] for g in listing["groups"]))
+        removed = action(f"6\n{game['group_id']}\n")
+        self.assertEqual(removed["group_id"], game["group_id"])
+        player.event("group_deleted")
+        lobby = action("1\n2\n\n")
+        self.assertEqual(lobby["type"], "lobby")
+        self.assertEqual(lobby["team_channel_ids"], [])
+
     def test_short_heartbeat_interruption_keeps_groups(self):
         group = self.game()
         self.manager.heartbeat = False
