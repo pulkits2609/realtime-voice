@@ -1,6 +1,7 @@
 #include <iostream>
 #include <stdexcept>
 #include "Network/server.hpp"
+#include "Common/consoleInput.hpp"
 
 using boost::asio::ip::udp;
 
@@ -37,7 +38,8 @@ int main(
     catch(const boost::system::system_error& e){
         std::cerr << Event("server_error", {
             {"code", e.code() == boost::asio::error::address_in_use ? "address_in_use" : "socket_error"},
-            {"native_code", e.code().value()}, {"message", e.what()}}).dump() << std::endl;
+            {"native_code", e.code().value()}, {"message", e.what()}})
+            .dump(ConsoleInput::IsTerminal() ? 2 : -1) << std::endl;
         return 1;
     }
     catch(const std::exception& e){

@@ -31,6 +31,8 @@ are bound and the TCP accept loop has started:
 {"v":2,"event":"server_ready","data":{"port":8080,"tcp":true,"udp":true}}
 ~~~
 
+When stdin is a terminal, CLI JSON is pretty-printed with two-space indentation.
+Piped server output keeps single-line JSON, including readiness/error events.
 This is a process log, not a TCP frame. The preliminary Starting Voice Server
 message is not readiness. Socket startup failures emit server_error to stderr
 with code address_in_use or socket_error, native_code, and message, then exit 1.

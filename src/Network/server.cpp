@@ -47,7 +47,8 @@ void Server::Run(){
         socket.SetNonBlocking(true);
         controlServer.Start();
         // Flush only after UDP is bound and TCP is listening/accepting.
-        std::cout << Event("server_ready", {{"port", port}, {"tcp", true}, {"udp", true}}).dump() << std::endl;
+        std::cout << Event("server_ready", {{"port", port}, {"tcp", true}, {"udp", true}})
+            .dump(ConsoleInput::IsTerminal() ? 2 : -1) << std::endl;
         console = std::thread(&Server::ConsoleLoop, this);
         while(running){
             io_context.poll();
@@ -144,7 +145,7 @@ void Server::ConsoleLoop(){
                 }
                 else throw std::runtime_error("Unknown server command");
             }
-            std::cout << Success(request, groups.Operator(request)).dump() << '\n' << std::flush;
+            std::cout << Success(request, groups.Operator(request)).dump(ConsoleInput::IsTerminal() ? 2 : -1) << '\n' << std::flush;
         }
         catch(const std::exception& error){
             step = 0;

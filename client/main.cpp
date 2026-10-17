@@ -40,7 +40,7 @@ int main(int argc, char* argv[]){
         Client client(argv[1], static_cast<unsigned short>(port), argv[3], join, mutes,
             [&](const Json& event){
                 std::lock_guard<std::mutex> lock(logMutex);
-                std::cerr << event.dump() << '\n';
+                std::cerr << event.dump(ConsoleInput::IsTerminal() ? 2 : -1) << '\n';
             }, audio);
         boost::asio::io_context signalsContext;
         boost::asio::signal_set signals(signalsContext, SIGINT, SIGTERM);

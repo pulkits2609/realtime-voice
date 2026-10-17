@@ -19,6 +19,14 @@ class ConsoleInput{
     public:
         enum Result { None, Line, Closed, TooLong };
         explicit ConsoleInput(bool echo = true):echo(echo){}
+        static bool IsTerminal(){
+#ifdef _WIN32
+            DWORD mode = 0;
+            return GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &mode) != 0;
+#else
+            return isatty(STDIN_FILENO) != 0;
+#endif
+        }
         Result Poll(std::string& line){
             for(unsigned count = 0; count < 256; count++){
                 char character = 0;
