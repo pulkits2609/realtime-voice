@@ -219,3 +219,15 @@ enable_testing()
 add_test(NAME opus COMMAND opus_test)
 add_test(NAME voice_packet COMMAND voice_packet_test)
 add_test(NAME protocol COMMAND protocol_test)
+
+add_executable(voice_groups_test
+    src/Tests/voiceGroupsTest.cpp
+    src/Network/voiceGroups.cpp
+    src/Network/packet.cpp
+)
+target_include_directories(voice_groups_test PRIVATE include ${BOOST_INCLUDE_DIR})
+target_link_libraries(voice_groups_test PRIVATE Threads::Threads)
+if(WIN32)
+    target_link_libraries(voice_groups_test PRIVATE ws2_32)
+endif()
+add_test(NAME voice_groups COMMAND voice_groups_test)
